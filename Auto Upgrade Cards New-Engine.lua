@@ -4,7 +4,7 @@ script_version("1.6")
 
 local ffi = require("ffi")
 
--- Android (MoonLoader Mobile) или ПК
+
 local MOBILE = rawget(_G, "MONET_DPI_SCALE") ~= nil or ffi.os ~= "Windows"
 
 local function tryRequire(name)
@@ -86,7 +86,7 @@ local function matchAny(str, pattern)
     return str:match(pattern) or str:match(cp(pattern)) or str:match(u8(pattern))
 end
 
--- на случай, если сервер пришлёт текст как \uXXXX
+
 local function unescapeU(str)
     if not str:find("\\u", 1, true) then return str end
     return (str:gsub("\\u(%x%x%x%x)", function(h)
@@ -153,10 +153,9 @@ local probeDone  = false
 local lastUseAt  = -100
 local pending    = nil
 local dirtyAt    = nil
-local sendFmt    = nil    -- выученный формат исходящего пакета 220/63 (берётся из реального клика)
-local ownSend    = false  -- true, пока скрипт сам отправляет пакет (чтобы не учиться на своих)
-local debugOn    = false  -- /upgdbg
-local HK = { mode = "нет", count = { send = 0, recv = 0, rpc = 0 } }
+local sendFmt    = nil    
+local ownSend    = false  
+local HK = {}
 
 local toasts = {}
 
@@ -236,27 +235,21 @@ local function markDirty()
     dirtyAt = os.clock()
 end
 
--- Новый протокол: пакет 220, тип 63 (клиент -> сервер).
--- По логу: 220, 63, iface=52, f1=-1, f2=<команда>, <json>
--- f2: 1 = переместить предмет, 2 = ПКМ по слоту, 3 = нажатие кнопки (использовать)
-local cefSkip     = nil   -- раскладка заголовка пакета 84, определяется при приёме
+
+
+
+local cefSkip     = nil   
 local IFACE_INV   = 52
 local SEND_TYPE   = 63
 local GET_TYPE    = 84
 local EV_MOVE, EV_SELECT, EV_USE = 1, 2, 3
 
--- Формат исходящего пакета 220/63 неизвестен заранее (по логу не видно ширину полей),
--- поэтому скрипт копирует заголовок из РЕАЛЬНОГО пакета, который клиент отправил при ручном клике
--- по предмету, и подставляет только команду (f2), длину и JSON. Формат сохраняется в upg.json.
--- Реальный формат из лога CEF Monitor: dc 3f | 34 | ff ff ff ff | cmd(int32) | len(u16) | json
--- т.е. после id/типа идут: iface=52 (1 байт), f1=-1 (int32), f2=команда (int32), длина (u16), текст.
-local DEFAULT_FMT = { head = { 52, 255, 255, 255, 255, 0, 0, 0, 0 }, cmdPos = 6, lenW = 2, tail = {} }
 
-local function dbgChat(text)
-    if debugOn then
-        pcall(sampAddChatMessage, cp("{FFAA00}[AUC dbg] {FFFFFF}" .. text), -1)
-    end
-end
+
+
+
+
+local DEFAULT_FMT = { head = { 52, 255, 255, 255, 255, 0, 0, 0, 0 }, cmdPos = 6, lenW = 2, tail = {} }
 
 local function buildRaw(fmt, cmd, payload)
     local raw = { PACKET_CEF, SEND_TYPE }
@@ -279,7 +272,7 @@ local function fmtKey(fmt)
     return hexOf(head) .. "|" .. fmt.cmdPos .. "|" .. fmt.lenW .. "|" .. hexOf(fmt.tail)
 end
 
--- raw: все байты пакета (1 = id 220, 2 = тип 63). Ищем JSON и 2/4 байта длины перед ним.
+
 local function learnFormat(raw)
     local n = #raw
     if n < 9 or raw[1] ~= PACKET_CEF or raw[2] ~= SEND_TYPE then return false end
@@ -295,7 +288,7 @@ local function learnFormat(raw)
                     if head[1] ~= IFACE_INV then return false end
                     local cmdPos
                     if #head == 9 and head[2] == 255 and head[3] == 255 and head[4] == 255 and head[5] == 255 then
-                        cmdPos = 6   -- iface, -1(int32), cmd(int32)
+                        cmdPos = 6   
                     else
                         for k = #head, 2, -1 do
                             if head[k] ~= 0 then cmdPos = k break end
@@ -326,10 +319,8 @@ local function sendCEF(cmd, payload)
         ownSend = false
         raknetDeleteBitStream(bs)
         if not sent then error(e) end
-        dbgChat((sendFmt and "SEND " or "SEND(guess) ") .. hexOf(raw))
     end)
     ownSend = false
-    if not ok then dbgChat("sendCEF error: " .. tostring(err)) end
 end
 
 local function cefSelect(slot)
@@ -447,7 +438,7 @@ local function openInventory()
 
     for _ = 1, 3 do
         cef.inventory, cef.lastData = {}, 0
-        -- /invent переключает окно: если оно уже открыто, но данных нет, закрываем и открываем заново
+        
         if cef.ifaceOpen then
             chat("/invent")
             waitFor(function() return not cef.ifaceOpen end, 2.0, true)
@@ -624,13 +615,9 @@ local function worker()
             setMessage(string.format("Слот %d: улучшаю...", slot))
             if stats.curStart == 0 then stats.curStart = cardLevel(slot) end
 
-            if not sendFmt then
-                -- формат берём по умолчанию из лога; если игрок сам кликнет по карте, он уточнится
-                dbgChat("формат пакета по умолчанию (из лога)")
-            end
-            cefSelect(slot)   -- как настоящий клиент: сперва выбор слота ({"slot":N,"type":1})
+            cefSelect(slot)   
             wait(450)
-            cefUse(slot)      -- затем «Использовать» ({"action":1,"id":0,"slot":N,"type":1})
+            cefUse(slot)      
             lastUseAt = os.clock()
             wait(300)
             waitDialogClosed()
@@ -779,7 +766,7 @@ local function openLink()
         return
     end
 
-    -- на телефоне: пробуем открыть, и на всякий случай копируем ссылку в буфер
+    
     pcall(os.execute, 'am start -a android.intent.action.VIEW -d "' .. TG_URL .. '" >/dev/null 2>&1')
     local copied = pcall(imgui.SetClipboardText, TG_URL)
     notify(copied and "Ссылка на канал скопирована в буфер" or ("Канал: " .. TG_URL), "info", 4)
@@ -809,11 +796,10 @@ function events.onCreate3DText(creator, color, position, distance, testLOS, atta
     end
 end
 
--- Заголовок пакета 84: [220][84][iface][sub][длина:int16][enc:int8][данные].
--- Точный размер iface/sub по логу не определить, поэтому пробуем несколько
--- вариантов и берём тот, где после разбора получился JSON.
+
+
+
 local SKIP_TRY    = { 2, 4, 3, 1, 5, 6 }
-local dumpedCount = 0
 
 local function readAt(bs, skip, needJson)
     raknetBitStreamResetReadPointer(bs)
@@ -844,19 +830,6 @@ local function readAt(bs, skip, needJson)
     return str
 end
 
-local function dumpHeader(bs)
-    if dumpedCount >= 2 then return end
-    dumpedCount = dumpedCount + 1
-    local parts = {}
-    pcall(function()
-        raknetBitStreamResetReadPointer(bs)
-        local n = math.min(16, math.floor(raknetBitStreamGetNumberOfBitsUsed(bs) / 8))
-        for i = 1, n do parts[i] = string.format("%02X", raknetBitStreamReadInt8(bs) % 256) end
-        raknetBitStreamResetReadPointer(bs)
-    end)
-    sampAddChatMessage(cp("{FF5555}[Auto Upgrade Cards] {FFFFFF}Не удалось разобрать пакет 84. Начало: " .. table.concat(parts, " ")), -1)
-end
-
 local function readCefString(bs)
     raknetBitStreamResetReadPointer(bs)
     if raknetBitStreamGetNumberOfBitsUsed(bs) < 80 then return nil end
@@ -865,7 +838,7 @@ local function readCefString(bs)
     local ptype = raknetBitStreamReadInt8(bs)
 
     if ptype == 17 then
-        return readAt(bs, 4, false)   -- старый формат
+        return readAt(bs, 4, false)   
     end
     if ptype ~= GET_TYPE then return nil end
 
@@ -880,7 +853,6 @@ local function readCefString(bs)
             return str
         end
     end
-    dumpHeader(bs)
     return nil
 end
 
@@ -933,15 +905,11 @@ function HK.hookReceivePacket(id, bs)
     if not ok or type(str) ~= "string" then return end
     str = unescapeU(str)
 
-    if debugOn and (str:find('"styleInt"', 1, true) or str:find('"bits"', 1, true)) then
-        dbgChat("GET " .. str:sub(1, 150))
-    end
-
     if str:find("lvl", 1, true) and str:find('"slot"', 1, true) then
         pcall(parseLevels, str)
     end
 
-    -- данные инвентаря (тип 1): первый кусок содержит слот 0 и max_slot
+    
     if str:find('"type":1,"items"', 1, true) then
         if str:find('"max_slot"', 1, true) and str:find('{"slot":0,', 1, true) then cef.inventory = {} end
         pcall(parseInventory, str)
@@ -978,7 +946,7 @@ function HK.hookReceivePacket(id, bs)
     end
 end
 
--- клиент шлёт 66/iface 52 с флагом: true = окно открыто, false = закрыто
+
 local function readRaw(bs)
     local count = math.floor(raknetBitStreamGetNumberOfBitsUsed(bs) / 8)
     if count < 2 or count > 700 then return nil end
@@ -990,64 +958,7 @@ local function readRaw(bs)
 end
 
 
--- ===== Диагностика: /upgsniff =====
--- Пишет в config/upg_sniff.txt ВСЕ исходящие пакеты и RPC в течение 25 секунд.
--- Нужно, чтобы увидеть, что именно клиент отправляет при нажатии «Использовать» на карте.
-HK.sniff = { on = false, until_ = 0, lines = {}, total = 0 }
-local SYNC_IDS = { [200]=1,[201]=1,[203]=1,[204]=1,[205]=1,[206]=1,[207]=1,[208]=1,[209]=1,[210]=1,[211]=1,[212]=1 }
-
-function HK.sniffAdd(kind, id, bs)
-    if not HK.sniff.on then return end
-    HK.sniff.total = HK.sniff.total + 1
-    if kind == "PKT" and SYNC_IDS[id] then return end
-    local ok, raw = pcall(function()
-        local total = raknetBitStreamGetNumberOfBytesUsed(bs)
-        if not total or total < 1 then return "" end
-        local n = math.min(total, 300)
-        local ptr = raknetBitStreamGetDataPtr(bs)
-        local p = ffi.cast("const uint8_t*", ffi.cast("uintptr_t", ptr))
-        local t = {}
-        for i = 1, n do t[i] = string.format("%02X", p[i - 1]) end
-        return table.concat(t, " ")
-    end)
-    HK.sniff.lines[#HK.sniff.lines + 1] = string.format("[%.3f] %s id=%s  %s", os.clock(), kind, tostring(id), ok and raw or ("ERR " .. tostring(raw)))
-end
-
-function HK.sniffStart()
-    if HK.sniff.on then return end
-    HK.sniff.on, HK.sniff.until_, HK.sniff.lines, HK.sniff.total = true, os.clock() + 25, {}, 0
-    sampAddChatMessage(cp("{FFAA00}[AUC] {FFFFFF}Хуки: " .. HK.mode), -1)
-    sampAddChatMessage(cp("{FFAA00}[AUC] {FFFFFF}Запись 25 сек. Откройте инвентарь и нажмите «Использовать» на карте у стола."), -1)
-    lua_thread.create(function()
-        while os.clock() < HK.sniff.until_ do wait(100) end
-        HK.sniff.on = false
-        local text = table.concat(HK.sniff.lines, "\n")
-        local saved = {}
-        for _, path in ipairs({ getWorkingDirectory() .. "/upg_sniff.txt", CONFIG_DIR .. "/upg_sniff.txt" }) do
-            local ok = pcall(function()
-                if not doesDirectoryExist(CONFIG_DIR) then createDirectory(CONFIG_DIR) end
-                local f = io.open(path, "w")
-                if f then f:write(text) f:close() saved[#saved + 1] = path end
-            end)
-        end
-        sampAddChatMessage(cp(string.format("{FFAA00}[AUC] {FFFFFF}Готово. Событий: %d, строк: %d, файл: %s",
-            HK.sniff.total, #HK.sniff.lines, saved[1] or "НЕ ЗАПИСАН")), -1)
-        if HK.sniff.total == 0 then
-            sampAddChatMessage(cp("{FF5555}[AUC] {FFFFFF}События не приходят - хуки не работают"), -1)
-        end
-        -- последние строки дублируем в чат: можно сделать скриншот
-        for i = math.max(1, #HK.sniff.lines - 11), #HK.sniff.lines do
-            sampAddChatMessage(cp("{AAAAAA}" .. HK.sniff.lines[i]:sub(1, 110)), -1)
-        end
-    end)
-end
-
-function HK.hookSendRpc(id, bs)
-    HK.sniffAdd("RPC", id, bs)
-end
-
 function HK.hookSendPacket(id, bs)
-    HK.sniffAdd("PKT", id, bs)
     if id ~= PACKET_CEF or ownSend then return end
     local ok, raw = pcall(readRaw, bs)
     if not ok or not raw or #raw < 4 then return end
@@ -1062,7 +973,6 @@ function HK.hookSendPacket(id, bs)
         end
     elseif raw[2] == SEND_TYPE then
         local good, fmt = learnFormat(raw)
-        if debugOn then dbgChat("CLIENT " .. hexOf(raw) .. (good and " (формат ок)" or " (не распознан)")) end
         if good then
             pcall(function()
                 local cmd = raw[fmt.cmdPos]
@@ -1070,26 +980,21 @@ function HK.hookSendPacket(id, bs)
                 local chars = {}
                 for k = from, #raw do chars[#chars + 1] = string.char(raw[k]) end
                 local payload = table.concat(chars)
-                local old = EV_MOVE .. "/" .. EV_SELECT .. "/" .. EV_USE
                 if payload:find('"action"', 1, true) then EV_USE = cmd
                 elseif payload:find('"from"', 1, true) then EV_MOVE = cmd
                 elseif payload:find('"slot"', 1, true) then EV_SELECT = cmd end
-                if old ~= EV_MOVE .. "/" .. EV_SELECT .. "/" .. EV_USE then
-                    dbgChat("команды: move/select/use = " .. EV_MOVE .. "/" .. EV_SELECT .. "/" .. EV_USE)
-                end
             end)
         end
         if good and (not sendFmt or fmtKey(sendFmt) ~= fmtKey(fmt)) then
             sendFmt = fmt
             markDirty()
             notify("Формат пакета изучен и сохранён", "success", 4)
-            dbgChat("формат: " .. fmtKey(fmt))
         end
     end
 end
 
 local W, H       = 760, 540
-local S          = 1   -- масштаб интерфейса (на телефоне подстраивается под экран)
+local S          = 1   
 local CONTENT_X  = 208
 local CONTENT_W  = 532
 
@@ -1143,7 +1048,7 @@ local function invBtn(id, size)
     return imgui.InvisibleButton(id, V2(size.x * S, size.y * S))
 end
 
--- обёртка над DrawList: масштабирует радиусы, скругления и толщину линий
+
 local dlReal
 local dlProxy = {}
 function dlProxy:AddRectFilled(a, b, col, r) dlReal:AddRectFilled(a, b, col, (r or 0) * S) end
@@ -1343,7 +1248,7 @@ local function scrollArea(id, x, y, w, h, contentH, drawContent)
         if wheel ~= 0 then s.pos = s.pos - wheel * 68; s.vel = 0 end
     end
 
-    -- прокрутка пальцем / перетаскиванием мыши + инерция после отпускания
+    
     local my = imgui.GetMousePos().y
     if active then
         if s.dragging then
@@ -2080,7 +1985,7 @@ end
 imgui.OnInitialize(function()
     imgui.GetIO().IniFilename = nil
 
-    -- масштаб: на ПК не больше 1, на телефоне подгоняем окно под экран
+    
     local sw, sh = getScreenResolution()
     local fit = math.min(sw * 0.92 / W, sh * 0.88 / H)
     S = MOBILE and clamp(fit, 0.6, 2.2) or clamp(fit, 0.6, 1.0)
@@ -2111,7 +2016,7 @@ imgui.OnInitialize(function()
                 end
             end
         end
-        -- шрифт не найден: встроенный (кириллицы в нём может не быть)
+        
         local ok, f = pcall(function()
             local cfg = imgui.ImFontConfig()
             cfg.SizePixels = size
@@ -2272,9 +2177,9 @@ local function toggleMenu()
     end
 end
 
--- ===== Регистрация хуков RakNet =====
--- На мобильном лоадере глобальные onSendPacket/onReceivePacket сами не вызываются,
--- хуки нужно подключать через RakLua (так же делает CEF Monitor).
+
+
+
 
 do
     local function reg(event, fn)
@@ -2287,10 +2192,8 @@ do
         if name and pcall(addEventHandler, name, fn) then return "addEventHandler" end
         return nil
     end
-    local m1 = reg("INCOMING_PACKET", function(id, bs) HK.count.recv = HK.count.recv + 1 pcall(HK.hookReceivePacket, id, bs) end)
-    local m2 = reg("OUTGOING_PACKET", function(id, bs) HK.count.send = HK.count.send + 1 pcall(HK.hookSendPacket, id, bs) end)
-    local m3 = reg("OUTGOING_RPC",    function(id, bs) HK.count.rpc  = HK.count.rpc  + 1 pcall(HK.hookSendRpc, id, bs) end)
-    HK.mode = (m1 or "нет") .. "/" .. (m2 or "нет") .. "/" .. (m3 or "нет")
+    reg("INCOMING_PACKET", function(id, bs) pcall(HK.hookReceivePacket, id, bs) end)
+    reg("OUTGOING_PACKET", function(id, bs) pcall(HK.hookSendPacket, id, bs) end)
 end
 
 function main()
@@ -2310,9 +2213,6 @@ function main()
     sampAddChatMessage(cp(line), -1)
 
     sampRegisterChatCommand("upg", toggleMenu)
-    sampAddChatMessage(cp("{FF0000}| {FFFFFF}Хуки пакетов: {FF0000}" .. HK.mode), -1)
-    sampRegisterChatCommand("upgsniff", HK.sniffStart)
-    sampAddChatMessage(cp("{FF0000}| {FFFFFF}Диагностика: {FF0000}/upgsniff{FFFFFF} - записать пакеты при нажатии «Использовать»"), -1)
 
     lua_thread.create(function()
         while true do
@@ -2362,6 +2262,5 @@ function onScriptTerminate(script)
     if script == thisScript() then
         saveConfig()
         pcall(sampUnregisterChatCommand, "upg")
-        pcall(sampUnregisterChatCommand, "upgsniff")
     end
 end
