@@ -1,1 +1,7 @@
-
+{
+  "enabled": true,
+  "pass": "new-engine-1",
+  "message": "Script Center перешёл на новый движок. Скрипты в списке обновлены под новый движок.",
+  "update_url": "",
+  "required_version": ""
+}
