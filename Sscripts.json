@@ -172,7 +172,7 @@
   "name": "Enchant Master(Мастер заточки)",
   "file": "Enchant Master Mobile.lua",
   "description": "Автоматическая заточка аксессуаров с выбором точильных материалов и целевого уровня",
-  "author": "Edward",
+  "author": "Stalin",
   "version": "1.0",
   "install_type": "moonloader",
   "telegram": "https://t.me/edward_scripts",
