@@ -10,26 +10,26 @@ local events = require 'lib.samp.events'
 encoding.default = 'CP1251'
 local u8 = encoding.UTF8
 
--- ===================== ГЉГЋГЌГ‘Г’ГЂГЌГ’Г› =====================
+-- ===================== КОНСТАНТЫ =====================
 local PACKET_CEF   = 220
-local SEND_TYPE    = 63     -- ГЄГ«ГЁГҐГ­ГІ -> Г±ГҐГ°ГўГҐГ°: ГЄГ«ГЁГЄ/Г±Г®ГЎГ»ГІГЁГҐ CEF
-local GET_TYPE     = 84     -- Г±ГҐГ°ГўГҐГ° -> ГЄГ«ГЁГҐГ­ГІ: JSON
-local UI_TYPE      = 62     -- Г±ГҐГ°ГўГҐГ° -> ГЄГ«ГЁГҐГ­ГІ: Г®ГІГЄГ°Г»ГІГј/Г§Г ГЄГ°Г»ГІГј ГЁГ­ГІГҐГ°ГґГҐГ©Г± (iface, ГґГ«Г ГЈ 0x80 = Г®ГІГЄГ°Г»ГІГј)
-local IFACE_INV    = 52     -- ГЁГ­ГўГҐГ­ГІГ Г°Гј
-local IFACE_ROUL   = 76     -- Г¬ГҐГ­Гѕ Г°ГіГ«ГҐГІГЄГЁ
+local SEND_TYPE    = 63     -- клиент -> сервер: клик/событие CEF
+local GET_TYPE     = 84     -- сервер -> клиент: JSON
+local UI_TYPE      = 62     -- сервер -> клиент: открыть/закрыть интерфейс (iface, флаг 0x80 = открыть)
+local IFACE_INV    = 52     -- инвентарь
+local IFACE_ROUL   = 76     -- меню рулетки
 local MAX_CEF_LEN  = 32767
-local EV_SELECT, EV_USE = 2, 3   -- ГЄГ®Г¬Г Г­Г¤Г» 220/63: 2 = ГўГ»ГЎГ°Г ГІГј Г±Г«Г®ГІ, 3 = ГЁГ±ГЇГ®Г«ГјГ§Г®ГўГ ГІГј (ГЄГ ГЄ Гў Box Opener / Auto Upgrade Cards)
+local EV_SELECT, EV_USE = 2, 3   -- команды 220/63: 2 = выбрать слот, 3 = использовать (как в Box Opener / Auto Upgrade Cards)
 
 local ROULETTES = {
-    { name = "ГЃГ°Г®Г­Г§Г®ГўГ Гї Г°ГіГ«ГҐГІГЄГ ",  item = 8,  model = 5587 },
-    { name = "Г‘ГҐГ°ГҐГЎГ°ГїГ­Г Гї Г°ГіГ«ГҐГІГЄГ ", item = 9,  model = 5588 },
-    { name = "Г‡Г®Г«Г®ГІГ Гї Г°ГіГ«ГҐГІГЄГ ",    item = 10, model = 5590 },
+    { name = "Бронзовая рулетка",  item = 8,  model = 5587 },
+    { name = "Серебряная рулетка", item = 9,  model = 5588 },
+    { name = "Золотая рулетка",    item = 10, model = 5590 },
 }
 
 local CONFIG_DIR  = getWorkingDirectory() .. "/config"
 local CONFIG_PATH = CONFIG_DIR .. "/auto_roulette.json"
 
--- ===================== Г‘ГЋГ‘Г’ГЋГџГЌГ€Г… =====================
+-- ===================== СОСТОЯНИЕ =====================
 local cfg   = { on = { false, false, false }, cnt = { 1, 1, 1 }, scale = 100, anim = 0, notify = true }
 local state = { running = false, stopping = false, prog = { 0, 0, 0 }, skip = {}, total = 0, cur = 0, virts = 0, msg = "", kind = "info" }
 local cef   = { inv = {}, amount = {}, lastData = 0, invOpen = false }
@@ -39,12 +39,12 @@ local ui    = {
     cnt  = { imgui.new.int(1), imgui.new.int(1), imgui.new.int(1) },
 }
 local pending, dirtyAt = nil, nil
-local itemMenu = { slot = nil, seq = 0 }   -- Г®ГІГўГҐГІ Г¬ГҐГ­Гѕ ГЇГ°ГҐГ¤Г¬ГҐГІГ : 220/84, iface 52, sub 3
+local itemMenu = { slot = nil, seq = 0 }   -- ответ меню предмета: 220/84, iface 52, sub 3
 local sendFmt, cefSkip, ownSend = nil, nil, false
 local SKIP_TRY = { 2, 4, 3, 1, 5, 6 }
 local HK = {}
-local rate = { t = 0, gap = 0.25 }     -- t: ГЄГ®ГЈГ¤Г  Г±ГҐГ°ГўГҐГ° ГЇГ®Г±Г«ГҐГ¤Г­ГЁГ© Г°Г Г§ Г®ГІГўГҐГІГЁГ« "ГЌГҐГ«ГјГ§Гї ГІГ ГЄ Г·Г Г±ГІГ® Г®ГІГЄГ°Г»ГўГ ГІГј ГЁГ­ГІГҐГ°ГґГҐГ©Г±"
-local RATE_TEXT = "ГЌГҐГ«ГјГ§Гї ГІГ ГЄ Г·Г Г±ГІГ®"
+local rate = { t = 0, gap = 0.25 }     -- t: когда сервер последний раз ответил "Нельзя так часто открывать интерфейс"
+local RATE_TEXT = "Нельзя так часто"
 local RATE_ERR  = "rate"
 
 local function clamp(v, lo, hi) return math.max(lo, math.min(hi, v)) end
@@ -72,7 +72,7 @@ local function fromHex(str)
     return t
 end
 
--- ===================== ГЉГЋГЌГ”Г€Гѓ =====================
+-- ===================== КОНФИГ =====================
 local function saveConfig()
     if not doesDirectoryExist(CONFIG_DIR) then createDirectory(CONFIG_DIR) end
     local f = io.open(CONFIG_PATH, "w")
@@ -109,9 +109,9 @@ local function loadConfig()
     saveConfig()
 end
 
--- ===================== Г—Г’Г…ГЌГ€Г… ГЏГЂГЉГ…Г’ГЋГ‚ =====================
--- Г‚ГµГ®Г¤ГїГ№ГЁГ© 220/84: [220][84][Г§Г ГЈГ®Г«Г®ГўГ®ГЄ skip ГЎГ Г©ГІ][len int16][encoded int8][Г¤Г Г­Г­Г»ГҐ]
--- ГђГ Г§Г¬ГҐГ° Г§Г ГЈГ®Г«Г®ГўГЄГ  ГЇГ®Г¤ГЎГЁГ°Г ГҐГІГ±Гї Г ГўГІГ®Г¬Г ГІГЁГ·ГҐГ±ГЄГЁ ГЁ Г§Г ГЇГ®Г¬ГЁГ­Г ГҐГІГ±Гї (cefSkip).
+-- ===================== ЧТЕНИЕ ПАКЕТОВ =====================
+-- Входящий 220/84: [220][84][заголовок skip байт][len int16][encoded int8][данные]
+-- Размер заголовка подбирается автоматически и запоминается (cefSkip).
 local function readAt(bs, skip)
     raknetBitStreamResetReadPointer(bs)
     raknetBitStreamIgnoreBits(bs, 16 + skip * 8)
@@ -139,8 +139,8 @@ local function readAt(bs, skip)
     return str
 end
 
--- ГђГ Г±ГЄГ«Г Г¤ГЄГЁ Г§Г ГЈГ®Г«Г®ГўГЄГ  220/84: [220][84][iface int8][sub 8/16/32][len 16/32][enc int8][Г¤Г Г­Г­Г»ГҐ]
--- (ГЄГ ГЄ Гў Box Opener). ГђГ ГЎГ®Г·Г Гї Г°Г Г±ГЄГ«Г Г¤ГЄГ  Г§Г ГЇГ®Г¬ГЁГ­Г ГҐГІГ±Гї.
+-- Раскладки заголовка 220/84: [220][84][iface int8][sub 8/16/32][len 16/32][enc int8][данные]
+-- (как в Box Opener). Рабочая раскладка запоминается.
 local RX_LAYOUTS = {
     { sub = 32, len = 32 }, { sub = 8, len = 32 }, { sub = 32, len = 16 },
     { sub = 8, len = 16 },  { sub = 16, len = 16 }, { sub = 16, len = 32 },
@@ -204,7 +204,7 @@ local function readCefString(bs)
     return nil
 end
 
--- Г‚ГµГ®Г¤ГїГ№ГЁГ© 220/62: [220][62][iface][ГґГ«Г ГЈ]  (ГґГ«Г ГЈ 0x80 = Г®ГІГЄГ°Г»ГІ, 0 = Г§Г ГЄГ°Г»ГІ)
+-- Входящий 220/62: [220][62][iface][флаг]  (флаг 0x80 = открыт, 0 = закрыт)
 local function readUi(bs)
     raknetBitStreamResetReadPointer(bs)
     if raknetBitStreamGetNumberOfBitsUsed(bs) < 32 then return nil end
@@ -242,18 +242,18 @@ function HK.hookReceivePacket(id, bs)
             cef.invOpen = open
         else
             if open then
-                -- Г«ГѕГЎГ®Г© ГЁГ­ГІГҐГ°ГґГҐГ©Г±, Г®ГІГЄГ°Г»ГўГёГЁГ©Г±Гї ГЇГ®Г±Г«ГҐ "ГЁГ±ГЇГ®Г«ГјГ§Г®ГўГ ГІГј" - ГЅГІГ® Г¬ГҐГ­Гѕ Г°ГіГ«ГҐГІГЄГЁ
+                -- любой интерфейс, открывшийся после "использовать" - это меню рулетки
                 if roul.waiting then roul.opened, roul.iface = true, iface end
             elseif roul.opened then
                 roul.closed = true
-                if roul.takeSent then roul.taken = true end   -- Г¬ГҐГ­Гѕ Г§Г ГЄГ°Г»Г«Г®Г±Гј ГЇГ®Г±Г«ГҐ Г§Г ГЎГ®Г°Г  ГЇГ°ГЁГ§Г 
+                if roul.takeSent then roul.taken = true end   -- меню закрылось после забора приза
             end
         end
         pcall(raknetBitStreamResetReadPointer, bs)
         return
     end
 
-    -- Г¬ГҐГ­Гѕ ГЇГ°ГҐГ¤Г¬ГҐГІГ  ГЇГ°ГЁГµГ®Г¤ГЁГІ ГЄГ ГЄ 220/84, iface 52, sub 3: ГґГЁГЄГ±ГЁГ°ГіГҐГ¬ Г±Г Г¬ ГґГ ГЄГІ ГЇГ°ГЁГµГ®Г¤Г 
+    -- меню предмета приходит как 220/84, iface 52, sub 3: фиксируем сам факт прихода
     local isMenu = false
     pcall(function()
         raknetBitStreamResetReadPointer(bs)
@@ -275,7 +275,7 @@ function HK.hookReceivePacket(id, bs)
 
     if str:find(RATE_TEXT, 1, true) or str:find(u8(RATE_TEXT), 1, true) then rate.t = os.clock() end
 
-    -- Г±ГЇГЁГ±Г®ГЄ ГЇГ°ГЁГ§Г®Гў Г°ГіГ«ГҐГІГЄГЁ (sysName = crate) ГІГ®Г¦ГҐ Г®Г§Г­Г Г·Г ГҐГІ, Г·ГІГ® Г¬ГҐГ­Гѕ Г®ГІГЄГ°Г»Г«Г®Г±Гј
+    -- список призов рулетки (sysName = crate) тоже означает, что меню открылось
     if roul.waiting and str:find('"sysName":"crate"', 1, true) then roul.opened, roul.ready = true, true end
 
     if str:find('"type":1,"items"', 1, true) then
@@ -284,8 +284,8 @@ function HK.hookReceivePacket(id, bs)
             pcall(parseInventory, str)
             cef.lastData = os.clock()
         else
-            pcall(parseInventory, str)   -- Г®Г¤ГЁГ­Г®Г·Г­Г®ГҐ Г®ГЎГ­Г®ГўГ«ГҐГ­ГЁГҐ Г±Г«Г®ГІГ 
-            -- ГЇГ°ГЁГ§ ГЇГ°ГЁГёВёГ« Гў Г¤Г°ГіГЈГ®Г© Г±Г«Г®ГІ (Г±Г«Г®ГІ Г±Г Г¬Г®Г© Г°ГіГ«ГҐГІГЄГЁ Г®ГЎГ­Г®ГўГ«ГїГҐГІГ±Гї ГЇГ°ГЁ ГЇГ°Г®ГЄГ°ГіГІГЄГҐ)
+            pcall(parseInventory, str)   -- одиночное обновление слота
+            -- приз пришёл в другой слот (слот самой рулетки обновляется при прокрутке)
             if roul.takeSent then
                 for sl in str:gmatch('"slot"%s*:%s*(%d+)') do
                     if tonumber(sl) ~= roul.slot then roul.taken = true end
@@ -295,7 +295,7 @@ function HK.hookReceivePacket(id, bs)
     end
 end
 
--- ===================== ГЋГ’ГЏГђГЂГ‚ГЉГЂ ГЏГЂГЉГ…Г’ГЋГ‚ =====================
+-- ===================== ОТПРАВКА ПАКЕТОВ =====================
 local function sendBitStream(bs)
     local send = raknetSendBitStreamEx or raknetSendBitStream
     ownSend = true
@@ -304,7 +304,7 @@ local function sendBitStream(bs)
     return ok
 end
 
--- 220/63 (ГЄГ«ГЁГҐГ­ГІ -> Г±ГҐГ°ГўГҐГ°): [220][63][iface int8][-1 int32][cmd int32][len int16][json]
+-- 220/63 (клиент -> сервер): [220][63][iface int8][-1 int32][cmd int32][len int16][json]
 local function sendCEF(cmd, payload)
     pcall(function()
         local bs = raknetNewBitStream()
@@ -328,8 +328,8 @@ local function cefUse(slot)
     sendCEF(EV_USE, string.format('{"action":1,"id":0,"slot":%d,"type":1}', slot))
 end
 
--- ГўГ»ГЎГ°Г ГІГј Г±Г«Г®ГІ -> Г¤Г®Г¦Г¤Г ГІГјГ±Гї Г®ГІГўГҐГІГ  Г¬ГҐГ­Гѕ ГЇГ°ГҐГ¤Г¬ГҐГІГ  (220/84, iface 52, sub 3) -> "Г€Г±ГЇГ®Г«ГјГ§Г®ГўГ ГІГј"
--- (Г­Г Г±ГІГ®ГїГ№ГЁГ© ГЄГ«ГЁГҐГ­ГІ Г­Г Г¦ГЁГ¬Г ГҐГІ "Г€Г±ГЇГ®Г«ГјГ§Г®ГўГ ГІГј" Г·ГҐГ°ГҐГ§ ~0.4-0.5 Г± ГЇГ®Г±Г«ГҐ ГўГ»ГЎГ®Г°Г ). Г‚Г»Г§Г»ГўГ ГІГј ГІГ®Г«ГјГЄГ® ГЁГ§ ГЇГ®ГІГ®ГЄГ .
+-- выбрать слот -> дождаться ответа меню предмета (220/84, iface 52, sub 3) -> "Использовать"
+-- (настоящий клиент нажимает "Использовать" через ~0.4-0.5 с после выбора). Вызывать только из потока.
 local function cefUseItem(slot)
     itemMenu.slot = nil
     local seq0 = itemMenu.seq
@@ -340,8 +340,8 @@ local function cefUseItem(slot)
     cefUse(slot)
 end
 
--- ГЉГ­Г®ГЇГЄГЁ Г¬ГҐГ­Гѕ Г°ГіГ«ГҐГІГЄГЁ: [220][63][76][int32 0][int32 N][int16 0]
--- N = 0 - Г§Г ГЇГіГ±ГІГЁГІГј ГЇГ°Г®ГЄГ°ГіГІГЄГі, 1 ГЁ 2 - Г§Г ГЎГ°Г ГІГј ГЇГ°ГЁГ§ / Г§Г ГЄГ°Г»ГІГј (ГЄГ ГЄ Гў Г¤Г Г¬ГЇГҐ)
+-- Кнопки меню рулетки: [220][63][76][int32 0][int32 N][int16 0]
+-- N = 0 - запустить прокрутку, 1 и 2 - забрать приз / закрыть (как в дампе)
 local function sendRoul(n)
     pcall(function()
         local bs = raknetNewBitStream()
@@ -356,8 +356,8 @@ local function sendRoul(n)
     end)
 end
 
--- ===================== Г€Г‘Г•ГЋГ„ГџГ™Г€Г… ГЏГЂГЉГ…Г’Г› =====================
--- ГЄГ«ГЁГҐГ­ГІ ГёГ«ВёГІ 220/66: iface + ГґГ«Г ГЈ (ГЎГЁГІ 0x8000 = Г®ГЄГ­Г® Г®ГІГЄГ°Г»ГІГ®)
+-- ===================== ИСХОДЯЩИЕ ПАКЕТЫ =====================
+-- клиент шлёт 220/66: iface + флаг (бит 0x8000 = окно открыто)
 local function readRaw(bs)
     local count = math.floor(raknetBitStreamGetNumberOfBitsUsed(bs) / 8)
     if count < 2 or count > 700 then return nil end
@@ -395,12 +395,12 @@ do
     reg("OUTGOING_PACKET", function(id, bs) pcall(HK.hookSendPacket, id, bs) end)
 end
 
--- ===================== Г‘Г’ГЂГ’Г€Г‘Г’Г€ГЉГЂ =====================
+-- ===================== СТАТИСТИКА =====================
 local STATS_PATH = CONFIG_DIR .. "/auto_roulette_stats.txt"
 local stats = {}
-local lastRun = { n = 0, t = 0, v = 0 }   -- ГЇГ®Г±Г«ГҐГ¤Г­ГЁГ© Г§Г ГЇГіГ±ГЄ Г¶ГҐГ«ГЁГЄГ®Г¬: Г±ГЄГ®Г«ГјГЄГ® Г®ГІГЄГ°Г»ГІГ® ГЁ Г§Г  Г±ГЄГ®Г«ГјГЄГ® Г±ГҐГЄГіГ­Г¤
+local lastRun = { n = 0, t = 0, v = 0 }   -- последний запуск целиком: сколько открыто и за сколько секунд
 for i = 1, 3 do stats[i] = { opened = 0, time = 0, lastN = 0, lastT = 0, prizes = {} } end
-local function cntText(n) return (n >= 9999) and "ГўГ±ГҐ" or tostring(n) end
+local function cntText(n) return (n >= 9999) and "все" or tostring(n) end
 local statsDirty = nil
 local function markStatsDirty() statsDirty = os.clock() end
 
@@ -418,17 +418,17 @@ end
 local function fmtTime(sec)
     sec = math.floor((tonumber(sec) or 0) + 0.5)
     local h, m, s = math.floor(sec / 3600), math.floor(sec % 3600 / 60), sec % 60
-    if h > 0 then return string.format("%dГ· %02dГ¬ %02dГ±", h, m, s) end
-    if m > 0 then return string.format("%dГ¬ %02dГ±", m, s) end
-    return string.format("%dГ±", s)
+    if h > 0 then return string.format("%dч %02dм %02dс", h, m, s) end
+    if m > 0 then return string.format("%dм %02dс", m, s) end
+    return string.format("%dс", s)
 end
 
 local function fmtDur(sec)
     sec = math.floor((tonumber(sec) or 0) + 0.5)
     local h, m, s2 = math.floor(sec / 3600), math.floor(sec % 3600 / 60), sec % 60
-    if h > 0 then return string.format("%d Г· %02d Г¬ГЁГ­ %02d Г±ГҐГЄ", h, m, s2) end
-    if m > 0 then return string.format("%d Г¬ГЁГ­ %02d Г±ГҐГЄ", m, s2) end
-    return string.format("%d Г±ГҐГЄ", s2)
+    if h > 0 then return string.format("%d ч %02d мин %02d сек", h, m, s2) end
+    if m > 0 then return string.format("%d мин %02d сек", m, s2) end
+    return string.format("%d сек", s2)
 end
 
 local function saveStats()
@@ -459,7 +459,7 @@ local function loadStats()
         else
             local pi, cnt, sum, kind, name = line:match("^P\t(%d+)\t(%d+)\t([%-%d%.eE%+]+)\t(%a+)\t(.+)$")
             if pi and stats[tonumber(pi)] then
-                if kind == "inv" then   -- Г±ГІГ Г°Г»ГҐ Г§Г ГЇГЁГ±ГЁ "msg" (ГўГ±Вё ГЇГ®Г¤Г°ГїГ¤ ГЁГ§ Г·Г ГІГ ) Г®ГІГЎГ°Г Г±Г»ГўГ ГҐГ¬
+                if kind == "inv" then   -- старые записи "msg" (всё подряд из чата) отбрасываем
                     stats[tonumber(pi)].prizes[kind .. ":" .. name] =
                         { count = tonumber(cnt), sum = tonumber(sum) or 0, kind = kind, name = name }
                 end
@@ -482,11 +482,11 @@ local function parseNum(tok)
     return tonumber(tok)
 end
 
--- "ГЃГ°Г®Г­Г§Г®ГўГ»Г© Г±ГіГ­Г¤ГіГЄ (x2)" -> "ГЃГ°Г®Г­Г§Г®ГўГ»Г© Г±ГіГ­Г¤ГіГЄ", 2
+-- "Бронзовый сундук (x2)" -> "Бронзовый сундук", 2
 local QTY_PATTERNS = {
-    "%s*%(?[xXГµГ•]%s*(%d+)%s*%)?%s*$",
-    "%s*%((%d+)%s*ГёГІ%.?%)%s*$",
-    "%s*(%d+)%s*ГёГІ%.?%s*$",
+    "%s*%(?[xXхХ]%s*(%d+)%s*%)?%s*$",
+    "%s*%((%d+)%s*шт%.?%)%s*$",
+    "%s*(%d+)%s*шт%.?%s*$",
     "%s*%((%d+)%)%s*$",
 }
 local function stripQty(name)
@@ -499,10 +499,10 @@ end
 
 local function trim(s) return (s:gsub("^%s+", ""):gsub("%s+$", "")) end
 
--- ГђГ Г§ГЎГ®Г° Г±ГІГ°Г®ГЈГ® Г±Г®Г®ГЎГ№ГҐГ­ГЁГї "Г„Г®ГЎГ ГўГ«ГҐГ­Г® Гў ГЁГ­ГўГҐГ­ГІГ Г°Гј: ..." -> Г­Г Г§ГўГ Г­ГЁГҐ, ГЄГ®Г«ГЁГ·ГҐГ±ГІГўГ®
+-- Разбор строго сообщения "Добавлено в инвентарь: ..." -> название, количество
 local function parseMessage(text)
     text = trim((text:gsub("{%x%x%x%x%x%x}", "")))
-    local inv = text:match("Г„Г®ГЎГ ГўГ«ГҐГ­Г® Гў ГЁГ­ГўГҐГ­ГІГ Г°Гј%s*:?%s*(.+)$")
+    local inv = text:match("Добавлено в инвентарь%s*:?%s*(.+)$")
     if not inv then return nil end
     inv = inv:gsub("[%.!%s]+$", "")
     local name, qty = stripQty(inv)
@@ -523,7 +523,7 @@ local function addPrize(ri, kind, name, qty)
     p.sum = p.sum + (qty or 1)
 end
 
--- Г‘Г®Г®ГЎГ№ГҐГ­ГЁГї Г·Г ГІГ  Г±Г®ГЎГЁГ°Г ГѕГІГ±Гї ГІГ®Г«ГјГЄГ® ГЇГ®ГЄГ  ГЁГ¤ВёГІ Г®ГІГЄГ°Г»ГІГЁГҐ Г°ГіГ«ГҐГІГЄГЁ (ГЁ 1.5 Г±ГҐГЄ ГЇГ®Г±Г«ГҐ Г­ГҐВё)
+-- Сообщения чата собираются только пока идёт открытие рулетки (и 1.5 сек после неё)
 local cap = { idx = nil, open = false, committed = false, untilT = 0, buf = {} }
 
 local function capReset(ri)
@@ -543,8 +543,8 @@ end
 
 local function capFeed(text)
     if not cap.idx then return end
-    -- ГЇГ°Г®ГўГҐГ°ГЄГ : ГЎГҐГ°ВёГ¬ Г’ГЋГ‹ГњГЉГЋ Г±Г®Г®ГЎГ№ГҐГ­ГЁГї "Г„Г®ГЎГ ГўГ«ГҐГ­Г® Гў ГЁГ­ГўГҐГ­ГІГ Г°Гј", Г®Г±ГІГ Г«ГјГ­Г®Г© Г·Г ГІ ГЁГЈГ­Г®Г°ГЁГ°ГіГҐГ¬
-    if not text:gsub("{%x%x%x%x%x%x}", ""):find("Г„Г®ГЎГ ГўГ«ГҐГ­Г® Гў ГЁГ­ГўГҐГ­ГІГ Г°Гј", 1, true) then return end
+    -- проверка: берём ТОЛЬКО сообщения "Добавлено в инвентарь", остальной чат игнорируем
+    if not text:gsub("{%x%x%x%x%x%x}", ""):find("Добавлено в инвентарь", 1, true) then return end
     local active = cap.open or (cap.committed and os.clock() < cap.untilT)
     if not active then return end
     local kind, name, qty = parseMessage(text)
@@ -563,16 +563,16 @@ local function resetStats()
     markStatsDirty()
 end
 
--- Г±Г®Г®ГЎГ№ГҐГ­ГЁГҐ Г±ГҐГ°ГўГҐГ°Г : ГЇГ°ГЁГ§ + ГЇГ®Г¬ГҐГІГЄГ  "Г§Г ГЎГ°Г Г­Г®"
+-- сообщение сервера: приз + пометка "забрано"
 function events.onServerMessage(color, text)
     if type(text) ~= "string" then return end
-    if roul.takeSent and text:gsub("{%x%x%x%x%x%x}", ""):find("Г„Г®ГЎГ ГўГ«ГҐГ­Г® Гў ГЁГ­ГўГҐГ­ГІГ Г°Гј", 1, true) then
+    if roul.takeSent and text:gsub("{%x%x%x%x%x%x}", ""):find("Добавлено в инвентарь", 1, true) then
         roul.taken, roul.msg = true, true
     end
     pcall(capFeed, text)
 end
 
--- ГЇГ°ГЁГ§-Г¤ГҐГ­ГјГЈГЁ: Гў Г·Г ГІГҐ ГІГҐГЄГ±ГІГ  Г­ГҐГІ, ГЇГ°ГЁГµГ®Г¤ГЁГІ ГІГ®Г«ГјГЄГ® RPC ГЁГ§Г¬ГҐГ­ГҐГ­ГЁГї Г¤ГҐГ­ГҐГЈ
+-- приз-деньги: в чате текста нет, приходит только RPC изменения денег
 local moneyBase = nil
 
 local function moneyReceived(delta)
@@ -581,11 +581,11 @@ local function moneyReceived(delta)
         roul.money = roul.money + delta
         state.virts = state.virts + delta
         roul.taken = true
-        cap.buf[#cap.buf + 1] = { "inv", "Г„ГҐГ­ГјГЈГЁ", delta }
+        cap.buf[#cap.buf + 1] = { "inv", "Деньги", delta }
     elseif cap.committed and os.clock() < cap.untilT then
         roul.money = roul.money + delta
         state.virts = state.virts + delta
-        addPrize(cap.idx, "inv", "Г„ГҐГ­ГјГЈГЁ", delta)
+        addPrize(cap.idx, "inv", "Деньги", delta)
         markStatsDirty()
     end
 end
@@ -603,7 +603,7 @@ function events.onSetPlayerMoney(money)
     if base and money > base then pcall(moneyReceived, money - base) end
 end
 
--- ===================== Г‹ГЋГѓГ€ГЉГЂ =====================
+-- ===================== ЛОГИКА =====================
 local function chat(cmd) pcall(sampSendChat, cmd) end
 
 local function dialogActive()
@@ -632,7 +632,7 @@ end
 local function finish(text, kind)
     state.elapsed = state.runStart and (os.clock() - state.runStart) or 0
     if state.total > 0 then lastRun.n, lastRun.t, lastRun.v = state.total, state.elapsed, state.virts end
-    if state.virts > 0 then text = text .. string.format(". ГЏГ®Г«ГіГ·ГҐГ­Г® ГўГЁГ°ГІГ®Гў: %s", fmtNum(state.virts)) end
+    if state.virts > 0 then text = text .. string.format(". Получено виртов: %s", fmtNum(state.virts)) end
     state.running, state.stopping, state.cur = false, false, 0
     pcall(saveStats)
     setMsg(text, kind or "info")
@@ -644,12 +644,12 @@ local function slowDown()
     rate.gap = math.min(rate.gap + 0.15, 1.2)
 end
 
--- /invent -> Г¦Г¤ВёГ¬ ГўГ±ГҐ ГЄГіГ±ГЄГЁ ГЁГ­ГўГҐГ­ГІГ Г°Гї (ГЇГ ГЄГҐГІГ» 220/84 Г± "max_slot")
+-- /invent -> ждём все куски инвентаря (пакеты 220/84 с "max_slot")
 local function openInventory(strict)
     waitDialogClosed()
     for attempt = 1, 6 do
         if state.stopping then return false end
-        if attempt > 1 then setMsg("ГЋГІГЄГ°Г»ГўГ Гѕ ГЁГ­ГўГҐГ­ГІГ Г°Гј, ГЇГ®ГЇГ»ГІГЄГ  " .. attempt .. "...", "info") end
+        if attempt > 1 then setMsg("Открываю инвентарь, попытка " .. attempt .. "...", "info") end
         if cef.invOpen then
             chat("/invent")
             waitFor(function() return not cef.invOpen end, 1.5, true)
@@ -663,14 +663,14 @@ local function openInventory(strict)
                 waitFor(function() return os.clock() - cef.lastData > 0.2 end, 2.0, true)
                 return true
             end
-            -- "ГЌГҐГ«ГјГ§Гї ГІГ ГЄ Г·Г Г±ГІГ® Г®ГІГЄГ°Г»ГўГ ГІГј ГЁГ­ГІГҐГ°ГґГҐГ©Г±" - ГЇГ®Г¤Г®Г¦Г¤Г ГІГј ГЁ ГЇГ®ГўГІГ®Г°ГЁГІГј
+            -- "Нельзя так часто открывать интерфейс" - подождать и повторить
             slowDown()
             waitFor(function() return false end, 1.2)
         end
         if state.stopping then return false end
     end
     if not strict and next(cef.inv) ~= nil then
-        say("Г€Г­ГўГҐГ­ГІГ Г°Гј Г­ГҐ ГЇГ°ГЁГ±Г«Г Г« Г¤Г Г­Г­Г»ГҐ Г§Г Г­Г®ГўГ® - ГЁГ±ГЇГ®Г«ГјГ§ГіГѕ ГЇГ®Г±Г«ГҐГ¤Г­ГЁГҐ ГЁГ§ГўГҐГ±ГІГ­Г»ГҐ")
+        say("Инвентарь не прислал данные заново - использую последние известные")
         return true
     end
     return false
@@ -685,12 +685,12 @@ local function findSlot(item)
     return best
 end
 
--- Г®Г¤Г­Г  Г°ГіГ«ГҐГІГЄГ : ГўГ»ГЎГ°Г ГІГј -> ГЁГ±ГЇГ®Г«ГјГ§Г®ГўГ ГІГј -> (Г¬ГҐГ­Гѕ) Г§Г ГЇГіГ±ГІГЁГІГј -> Г§Г ГЎГ°Г ГІГј ГЇГ°ГЁГ§ -> Г±Г°Г Г§Гі ГўГ»Г©ГІГЁ
+-- одна рулетка: выбрать -> использовать -> (меню) запустить -> забрать приз -> сразу выйти
 local function openOne(slot, ri)
     capReset(ri)
     roul.opened, roul.closed, roul.ready, roul.msg, roul.money = false, false, false, false, 0
     roul.taken, roul.takeSent, roul.slot = false, false, slot
-    setMsg(string.format("%s: Г®ГІГЄГ°Г»ГўГ Гѕ (Г±Г«Г®ГІ %d)", ROULETTES[ri].name, slot), "info")
+    setMsg(string.format("%s: открываю (слот %d)", ROULETTES[ri].name, slot), "info")
     for attempt = 1, 2 do
         local tReq = os.clock()
         roul.waiting = true
@@ -699,44 +699,44 @@ local function openOne(slot, ri)
         if roul.opened then break end
         roul.waiting = false
         if rate.t >= tReq then return false, RATE_ERR end
-        if attempt == 2 then return false, "ГЊГҐГ­Гѕ Г°ГіГ«ГҐГІГЄГЁ Г­ГҐ Г®ГІГЄГ°Г»Г«Г®Г±Гј" end
+        if attempt == 2 then return false, "Меню рулетки не открылось" end
         wait(500)
     end
     roul.waiting = false
-    waitFor(function() return roul.ready end, 1.0, true)   -- Г±ГЇГЁГ±Г®ГЄ ГЇГ°ГЁГ§Г®Гў ГЇГ°ГЁГёВёГ« - Г¬ГҐГ­Гѕ ГЈГ®ГІГ®ГўГ®
+    waitFor(function() return roul.ready end, 1.0, true)   -- список призов пришёл - меню готово
     wait(150)
-    cap.open = true                              -- Г± ГЅГІГ®ГЈГ® Г¬Г®Г¬ГҐГ­ГІГ  ГЇГЁГёГҐГ¬ Г±Г®Г®ГЎГ№ГҐГ­ГЁГї Г·Г ГІГ 
-    sendRoul(0)                                  -- Г§Г ГЇГіГ±ГІГЁГІГј ГЇГ°Г®ГЄГ°ГіГІГЄГі
-    wait(math.floor(cfg.anim * 1000))            -- ГЇГ ГіГ§Г  (ГЇГ® ГіГ¬Г®Г«Г·Г Г­ГЁГѕ 0 - Г±Г°Г Г§Гі)
+    cap.open = true                              -- с этого момента пишем сообщения чата
+    sendRoul(0)                                  -- запустить прокрутку
+    wait(math.floor(cfg.anim * 1000))            -- пауза (по умолчанию 0 - сразу)
     roul.takeSent = true
     local t0 = os.clock()
     while os.clock() - t0 < 14 do
         sendRoul(1)
         sendRoul(2)
         if waitFor(function() return roul.taken end, 1.5, true) then
-            -- Г¤Г®Г¦ГЁГ¤Г ГҐГ¬Г±Гї Г§Г ГЄГ°Г»ГІГЁГї Г¬ГҐГ­Гѕ, ГЁГ­Г Г·ГҐ Г±Г«ГҐГ¤ГіГѕГ№ГЁГ© /invent Г­ГҐ Г±Г°Г ГЎГ®ГІГ ГҐГІ
+            -- дожидаемся закрытия меню, иначе следующий /invent не сработает
             if not waitFor(function() return roul.closed end, 0.6, true) then
                 sendRoul(2)
                 waitFor(function() return roul.closed end, 1.0, true)
             end
-            -- Г±Г®Г®ГЎГ№ГҐГ­ГЁГҐ Г® ГЇГ°ГЁГ§ГҐ Г¤Г®Г«Г¦Г­Г® ГіГ±ГЇГҐГІГј Г§Г ГЇГЁГ±Г ГІГјГ±Гї Гў Г±ГІГ ГІГЁГ±ГІГЁГЄГі Г¤Г® Г±Г«ГҐГ¤ГіГѕГ№ГҐГЈГ® ГЇГ®Г¤ГµГ®Г¤Г 
+            -- сообщение о призе должно успеть записаться в статистику до следующего подхода
             if not roul.msg and roul.money == 0 then
                 waitFor(function() return roul.msg or roul.money > 0 end, 0.3, true)
             end
             return true
         end
     end
-    return false, "ГЏГ°ГЁГ§ Г­ГҐ ГЇГ®Г¤ГІГўГҐГ°Г¦Г¤ВёГ­"
+    return false, "Приз не подтверждён"
 end
 
--- Г°ГіГ«ГҐГІГЄГЁ ГЅГІГ®ГЈГ® ГІГЁГЇГ  Гў ГЁГ­ГўГҐГ­ГІГ Г°ГҐ ГЎГ®Г«ГјГёГҐ Г­ГҐГІ (ГЁГЈГ°Г®ГЄ ГЇГ®ГІГ°Г ГІГЁГ«) - ГЇГ°Г®ГЇГіГ±ГЄГ ГҐГ¬ ГЁ ГЁГ¤ВёГ¬ Г¤Г Г«ГјГёГҐ
+-- рулетки этого типа в инвентаре больше нет (игрок потратил) - пропускаем и идём дальше
 local function outOfStock(ri, r)
     state.skip[ri] = true
     local msg
     if cfg.cnt[ri] >= 9999 then
-        msg = string.format("%s: ГЎГ®Г«ГјГёГҐ Г­ГҐГІ Гў ГЁГ­ГўГҐГ­ГІГ Г°ГҐ (Г®ГІГЄГ°Г»ГІГ® %d)", r.name, state.prog[ri])
+        msg = string.format("%s: больше нет в инвентаре (открыто %d)", r.name, state.prog[ri])
     else
-        msg = string.format("%s: Г§Г ГЄГ®Г­Г·ГЁГ«ГЁГ±Гј (Г®ГІГЄГ°Г»ГІГ® %d ГЁГ§ %d), ГЁГ¤Гі Г¤Г Г«ГјГёГҐ", r.name, state.prog[ri], cfg.cnt[ri])
+        msg = string.format("%s: закончились (открыто %d из %d), иду дальше", r.name, state.prog[ri], cfg.cnt[ri])
     end
     if cfg.notify then say(msg) end
     setMsg(msg, "info")
@@ -751,14 +751,14 @@ local function worker()
             local S = stats[ri]
             S.lastN, S.lastT = 0, 0
             while state.prog[ri] < target do
-                if state.stopping then return finish("ГЋГ±ГІГ Г­Г®ГўГ«ГҐГ­Г® ГўГ°ГіГ·Г­ГіГѕ", "info") end
+                if state.stopping then return finish("Остановлено вручную", "info") end
                 setMsg(string.format("%s: %d / %s", r.name, state.prog[ri], cntText(target))
-                    .. (state.virts > 0 and string.format("  |  Г‚ГЁГ°ГІГ»: +%s", fmtNum(state.virts)) or ""), "info")
+                    .. (state.virts > 0 and string.format("  |  Вирты: +%s", fmtNum(state.virts)) or ""), "info")
 
                 local t0 = os.clock()
                 if not openInventory() then
-                    if state.stopping then return finish("ГЋГ±ГІГ Г­Г®ГўГ«ГҐГ­Г® ГўГ°ГіГ·Г­ГіГѕ", "info") end
-                    return finish("ГЌГҐ ГіГ¤Г Г«Г®Г±Гј Г®ГІГЄГ°Г»ГІГј ГЁГ­ГўГҐГ­ГІГ Г°Гј", "error")
+                    if state.stopping then return finish("Остановлено вручную", "info") end
+                    return finish("Не удалось открыть инвентарь", "error")
                 end
 
                 local slot = findSlot(r.item)
@@ -769,17 +769,17 @@ local function worker()
 
                 local ok, err = openOne(slot, ri)
                 if not ok and err == RATE_ERR then
-                    -- Г±ГҐГ°ГўГҐГ° Г®ГІГўГҐГІГЁГ« "ГЌГҐГ«ГјГ§Гї ГІГ ГЄ Г·Г Г±ГІГ® Г®ГІГЄГ°Г»ГўГ ГІГј ГЁГ­ГІГҐГ°ГґГҐГ©Г±": ГЇГ ГіГ§Г  ГЁ ГўГҐГ±Гј ГЇГ®Г¤ГµГ®Г¤ Г§Г Г­Г®ГўГ®
+                    -- сервер ответил "Нельзя так часто открывать интерфейс": пауза и весь подход заново
                     capDiscard()
                     slowDown()
                     waitFor(function() return false end, 1.2)
                 elseif not ok then
                     capDiscard()
-                    -- ГўГ®Г§Г¬Г®Г¦Г­Г®, Г°ГіГ«ГҐГІГЄГЁ ГЇГ°Г®Г±ГІГ® Г§Г ГЄГ®Г­Г·ГЁГ«ГЁГ±Гј - ГЇГҐГ°ГҐГЇГ°Г®ГўГҐГ°ГїГҐГ¬ Г±ГўГҐГ¦ГЁГ© ГЁГ­ГўГҐГ­ГІГ Г°Гј
+                    -- возможно, рулетки просто закончились - перепроверяем свежий инвентарь
                     local still = false
                     if not state.stopping and openInventory(true) then still = findSlot(r.item) ~= nil end
                     if not still then
-                        if state.stopping then return finish("ГЋГ±ГІГ Г­Г®ГўГ«ГҐГ­Г® ГўГ°ГіГ·Г­ГіГѕ", "info") end
+                        if state.stopping then return finish("Остановлено вручную", "info") end
                         outOfStock(ri, r)
                         break
                     end
@@ -793,7 +793,7 @@ local function worker()
                     state.prog[ri] = state.prog[ri] + 1
                     state.total = state.total + 1
                     markStatsDirty()
-                    waitFor(function() return false end, rate.gap)   -- Г­ГҐГЎГ®Г«ГјГёГ Гї ГЇГ ГіГ§Г  Г¬ГҐГ¦Г¤Гі ГЇГ®Г¤ГµГ®Г¤Г Г¬ГЁ
+                    waitFor(function() return false end, rate.gap)   -- небольшая пауза между подходами
                 end
             end
         end
@@ -802,8 +802,8 @@ local function worker()
     for ri, r in ipairs(ROULETTES) do
         if state.skip[ri] then lost[#lost + 1] = string.format("%s (%d)", r.name, state.prog[ri]) end
     end
-    local text = string.format("ГѓГ®ГІГ®ГўГ®! ГЋГІГЄГ°Г»ГІГ®: %d Г§Г  %s", state.total, fmtDur(os.clock() - state.runStart))
-    if #lost > 0 then text = text .. ". Г‡Г ГЄГ®Г­Г·ГЁГ«ГЁГ±Гј: " .. table.concat(lost, ", ") end
+    local text = string.format("Готово! Открыто: %d за %s", state.total, fmtDur(os.clock() - state.runStart))
+    if #lost > 0 then text = text .. ". Закончились: " .. table.concat(lost, ", ") end
     return finish(text, "success")
 end
 
@@ -813,7 +813,7 @@ local function startScript()
     local any = false
     for i = 1, 3 do if cfg.on[i] then any = true end end
     if not any then
-        setMsg("ГЋГІГ¬ГҐГІГјГІГҐ ГµГ®ГІГї ГЎГ» Г®Г¤Г­Гі Г°ГіГ«ГҐГІГЄГі", "error")
+        setMsg("Отметьте хотя бы одну рулетку", "error")
         return
     end
     state.prog = { 0, 0, 0 }
@@ -822,20 +822,20 @@ local function startScript()
     state.skip = {}
     state.total, state.cur, state.stopping = 0, 0, false
     state.running = true
-    setMsg("Г‡Г ГЇГіГ±ГЄ...", "info")
+    setMsg("Запуск...", "info")
     lua_thread.create(function()
         local ok = pcall(worker)
-        if not ok and state.running then finish("Г‚Г­ГіГІГ°ГҐГ­Г­ГїГї Г®ГёГЁГЎГЄГ , Г§Г ГЇГіГ±ГІГЁГІГҐ Г§Г Г­Г®ГўГ®", "error") end
+        if not ok and state.running then finish("Внутренняя ошибка, запустите заново", "error") end
     end)
 end
 
 local function requestStop()
     if not state.running or state.stopping then return end
     state.stopping = true
-    setMsg("ГЋГ±ГІГ Г­Г®ГўГЄГ  ГЇГ®Г±Г«ГҐ ГІГҐГЄГіГ№ГҐГ© Г°ГіГ«ГҐГІГЄГЁ...", "info")
+    setMsg("Остановка после текущей рулетки...", "info")
 end
 
--- ===================== ГЊГ…ГЌГћ =====================
+-- ===================== МЕНЮ =====================
 local function V2(x, y) return imgui.ImVec2(x, y) end
 local function V4(r, g, b, a) return imgui.ImVec4(r, g, b, a or 1) end
 
@@ -851,7 +851,7 @@ local C = {
     dim    = V4(0.58, 0.60, 0.70),
     clear  = V4(0, 0, 0, 0),
 }
--- Г¶ГўГҐГІГ  Г°ГіГ«ГҐГІГ®ГЄ: ГЎГ°Г®Г­Г§Г  / Г±ГҐГ°ГҐГЎГ°Г® / Г§Г®Г«Г®ГІГ®
+-- цвета рулеток: бронза / серебро / золото
 local RC = { V4(0.86, 0.54, 0.24), V4(0.80, 0.84, 0.92), V4(1.00, 0.82, 0.25) }
 
 local loadIcons
@@ -896,9 +896,9 @@ imgui.OnInitialize(function()
     end
 end)
 
--- ---------- ГЇГ°Г®ГЄГ°ГіГІГЄГ  ГЇГ Г«ГјГ¶ГҐГ¬ ----------
--- Г‹ГЁГ±ГІГ ГІГј Г¬Г®Г¦Г­Г® Г§Г  Г«ГѕГЎГ®ГҐ Г¬ГҐГ±ГІГ® Г±ГЇГЁГ±ГЄГ  (Гў ГІГ®Г¬ Г·ГЁГ±Г«ГҐ Г§Г  ГЄГ­Г®ГЇГЄГЁ): ГҐГ±Г«ГЁ ГЇГ Г«ГҐГ¶ Г±Г¤ГўГЁГ­ГіГ«Г±Гї
--- ГЎГ®Г«ГјГёГҐ ГЇГ®Г°Г®ГЈГ , Г­Г Г¦Г ГІГЁГї Г­Г  ГЄГ­Г®ГЇГЄГЁ Гў ГЅГІГ®ГІ Г¦ГҐГ±ГІ ГЁГЈГ­Г®Г°ГЁГ°ГіГѕГІГ±Гї.
+-- ---------- прокрутка пальцем ----------
+-- Листать можно за любое место списка (в том числе за кнопки): если палец сдвинулся
+-- больше порога, нажатия на кнопки в этот жест игнорируются.
 local drag = { active = false, moved = false, inputActive = false, sy = 0, ly = 0, vel = 0 }
 local view = { tab = 1, confirm = 0, open = { false, false, false }, edit = nil, editFresh = false, editSeen = false }
 
@@ -921,20 +921,20 @@ local function dragScroll(s)
             drag.active = false
         end
     elseif math.abs(drag.vel) > 0.5 then
-        imgui.SetScrollY(imgui.GetScrollY() - drag.vel)   -- ГЁГ­ГҐГ°Г¶ГЁГї
+        imgui.SetScrollY(imgui.GetScrollY() - drag.vel)   -- инерция
         drag.vel = drag.vel * 0.92
     else
         drag.vel = 0
     end
 end
 
--- ---------- Г®ГІГ°ГЁГ±Г®ГўГЄГ  (Г¤ГЁГ§Г Г©Г­ ГЇГ® Г¬Г ГЄГҐГІГі) ----------
+-- ---------- отрисовка (дизайн по макету) ----------
 view.hold = view.hold or {}
 
-local DW, DH = 1085, 600     -- Г°Г Г§Г¬ГҐГ° Г®ГЄГ­Г  Гў "Г¤ГЁГ§Г Г©Г­-ГҐГ¤ГЁГ­ГЁГ¶Г Гµ"
-local S = 1                  -- ГІГҐГЄГіГ№ГЁГ© Г¬Г Г±ГёГІГ ГЎ
-local OX, OY = 0, 0          -- Г­Г Г·Г Г«Г® ГЄГ®Г®Г°Г¤ГЁГ­Г ГІ ГІГҐГЄГіГ№ГҐГ© Г®ГЎГ«Г Г±ГІГЁ (ГЅГЄГ°Г Г­)
-local dl                     -- DrawList ГІГҐГЄГіГ№ГҐГЈГ® Г®ГЄГ­Г 
+local DW, DH = 1085, 600     -- размер окна в "дизайн-единицах"
+local S = 1                  -- текущий масштаб
+local OX, OY = 0, 0          -- начало координат текущей области (экран)
+local dl                     -- DrawList текущего окна
 
 local K = {
     bg    = V4(0.030, 0.045, 0.080), panel = V4(0.055, 0.075, 0.120), panel2 = V4(0.085, 0.110, 0.170),
@@ -943,14 +943,14 @@ local K = {
     bad   = V4(0.95, 0.30, 0.35),    warn  = V4(0.98, 0.78, 0.25),    white  = V4(1, 1, 1),
 }
 local RCOL   = { V4(0.93, 0.50, 0.25), V4(0.66, 0.76, 0.96), V4(1.00, 0.78, 0.20) }
-local RDESC  = { "ГЌГ ГЈГ°Г Г¤Г»: Г®ГЎГ»Г·Г­Г»ГҐ ГЇГ°ГЁГ§Г»", "ГЌГ ГЈГ°Г Г¤Г»: Г¶ГҐГ­Г­Г»ГҐ ГЇГ°ГЁГ§Г»", "ГЌГ ГЈГ°Г Г¤Г»: Г°ГҐГ¤ГЄГЁГҐ ГЁ ГіГ­ГЁГЄГ Г«ГјГ­Г»ГҐ ГЇГ°ГЁГ§Г»" }
-local RSHORT = { "ГЃГ°Г®Г­Г§Г®ГўГ»ГҐ", "Г‘ГҐГ°ГҐГЎГ°ГїГ­Г»ГҐ", "Г‡Г®Г«Г®ГІГ»ГҐ" }
+local RDESC  = { "Награды: обычные призы", "Награды: ценные призы", "Награды: редкие и уникальные призы" }
+local RSHORT = { "Бронзовые", "Серебряные", "Золотые" }
 
 local colFn = imgui.GetColorU32Vec4 or imgui.ColorConvertFloat4ToU32
 local function U(c, a) return colFn(V4(c.x, c.y, c.z, a or c.w)) end
 local function P(x, y) return V2(OX + x * S, OY + y * S) end
 
--- ГЄГЅГё ГЇГҐГ°ГҐГЄГ®Г¤ГЁГ°Г®ГўГЄГЁ Г±ГІГ°Г®ГЄ Гў UTF-8 (Г·ГІГ®ГЎГ» Г­ГҐ ГЈГ®Г­ГїГІГј u8 ГЄГ Г¦Г¤Г»Г© ГЄГ Г¤Г°)
+-- кэш перекодировки строк в UTF-8 (чтобы не гонять u8 каждый кадр)
 local u8cache, u8count = {}, 0
 local function U8(str)
     local v = u8cache[str]
@@ -982,7 +982,7 @@ local function tw(str, px)
     setPx(px)
     return imgui.CalcTextSize(U8(str)).x / S
 end
--- ax: 0 Г±Г«ГҐГўГ , 0.5 ГЇГ® Г¶ГҐГ­ГІГ°Гі, 1 Г±ГЇГ°Г ГўГ ; ay: 0 Г±ГўГҐГ°ГµГі, 0.5 ГЇГ® Г¶ГҐГ­ГІГ°Гі
+-- ax: 0 слева, 0.5 по центру, 1 справа; ay: 0 сверху, 0.5 по центру
 local function T(x, y, str, c, px, ax, a, ay)
     setPx(px)
     local s = U8(str)
@@ -1027,7 +1027,7 @@ end
 local function clipBegin(x, y, w, h) dl:PushClipRect(P(x, y), P(x + w, y + h), true) end
 local function clipEnd() dl:PopClipRect() end
 
--- ---------- ГЁГЄГ®Г­ГЄГЁ Г°ГіГ«ГҐГІГ®ГЄ ----------
+-- ---------- иконки рулеток ----------
 local ICON_B64 = {
 [[
 iVBORw0KGgoAAAANSUhEUgAAAMAAAADACAMAAABlApw1AAACf1BMVEUnHhckHRciHRxYJRUeHBJcVFGUZFLn3dpsSyxtRipULhpjYF+ln5pmXFpdVVTYqJX0
@@ -1339,16 +1339,16 @@ loadIcons = function()
     end
 end
 
--- ---------- Г®ГЎГ№ГЁГҐ ГЅГ«ГҐГ¬ГҐГ­ГІГ» ----------
+-- ---------- общие элементы ----------
 local function setCount(i, v)
     v = clamp(math.floor(v), 1, 9999)
     ui.cnt[i][0], cfg.cnt[i] = v, v
     markDirty()
 end
 
-local function cntLabel(n) return (n >= 9999) and "Г‚Г±ГҐ" or tostring(n) end
+local function cntLabel(n) return (n >= 9999) and "Все" or tostring(n) end
 
--- ГЄГ­Г®ГЇГЄГ  "+" / "-": ГЄГ«ГЁГЄ = ГёГ ГЈ, ГіГ¤ГҐГ°Г¦Г Г­ГЁГҐ = Г ГўГІГ®ГЇГ®ГўГІГ®Г° Г± ГіГ±ГЄГ®Г°ГҐГ­ГЁГҐГ¬
+-- кнопка "+" / "-": клик = шаг, удержание = автоповтор с ускорением
 local function stepper(id, x, y, w, h, dir, apply)
     local clicked, hov, act = hit(id, x, y, w, h)
     fill(x, y, w, h, K.panel2, 10)
@@ -1384,7 +1384,7 @@ local function switch(id, x, y, on)
     return clicked
 end
 
--- ---------- ГёГ ГЇГЄГ  ГЁ ГўГЄГ«Г Г¤ГЄГЁ ----------
+-- ---------- шапка и вкладки ----------
 local function drawHeader()
     local lx, ly = 54, 50
     disc(lx, ly, 32, K.panel2)
@@ -1406,9 +1406,9 @@ local function drawHeader()
     fill(px, 26, pw, 26, K.blue, 6, 0.16)
     frame(px, 26, pw, 26, K.blue, 6, 0.8)
     T(px + pw / 2, 39, "by Edward", K.cyan, 15, 0.5, nil, 0.5)
-    T(100, 64, "ГЂГўГІГ®Г¬Г ГІГЁГ·ГҐГ±ГЄГ®ГҐ Г®ГІГЄГ°Г»ГІГЁГҐ Г°ГіГ«ГҐГІГ®ГЄ", K.dim, 18)
+    T(100, 64, "Автоматическое открытие рулеток", K.dim, 18)
 
-    -- ГЎГҐГ©Г¤Г¦ Г±ГҐГ°ГўГҐГ°Г 
+    -- бейдж сервера
     local bx, by, bw, bh = DW - 72 - 14 - 176, 14, 176, 54
     fill(bx, by, bw, bh, K.panel, 14)
     frame(bx, by, bw, bh, K.line, 14, 0.8)
@@ -1416,9 +1416,9 @@ local function drawHeader()
     T(bx + 27, by + 27, "R", K.white, 24, 0.5, nil, 0.5)
     T(bx + 54, by + 8, "Rodina RP", K.text, 17)
     disc(bx + 58, by + 40, 3.5, state.running and K.good or K.cyan)
-    T(bx + 67, by + 32, state.running and "Г‘ГЄГ°ГЁГЇГІ Г°Г ГЎГ®ГІГ ГҐГІ" or "Г‘ГЄГ°ГЁГЇГІ Г ГЄГІГЁГўГҐГ­", K.dim, 13)
+    T(bx + 67, by + 32, state.running and "Скрипт работает" or "Скрипт активен", K.dim, 13)
 
-    -- Г§Г ГЄГ°Г»ГІГј
+    -- закрыть
     local cx, cy, cw, ch = DW - 72, 24, 50, 34
     local clicked, hov = hit("##close", cx, cy, cw, ch)
     fill(cx, cy, cw, ch, hov and K.panel2 or K.panel, 10)
@@ -1430,7 +1430,7 @@ local function drawHeader()
     line(22, 96, DW - 22, 96, K.line, 1, 0.6)
 end
 
-local TABS = { "ГђГіГ«ГҐГІГЄГЁ", "Г‘ГІГ ГІГЁГ±ГІГЁГЄГ ", "ГЌГ Г±ГІГ°Г®Г©ГЄГЁ" }
+local TABS = { "Рулетки", "Статистика", "Настройки" }
 local function drawTabs()
     local x = 22
     for k, name in ipairs(TABS) do
@@ -1449,14 +1449,14 @@ local function drawTabs()
     end
     if state.running then
         local cur = ROULETTES[state.cur]
-        local txt = string.format("Г€Г¤ВёГІ Г®ГІГЄГ°Г»ГІГЁГҐ: %s %d / %s  |  %s", cur and cur.name or "",
+        local txt = string.format("Идёт открытие: %s %d / %s  |  %s", cur and cur.name or "",
             state.prog[state.cur] or 0, cntLabel(cfg.cnt[state.cur] or 0),
             fmtTime(os.clock() - (state.runStart or os.clock())))
         T(DW - 22, 124, txt, K.good, 16, 1, nil, 0.5)
     end
 end
 
--- ---------- ГўГЄГ«Г Г¤ГЄГ  "ГђГіГ«ГҐГІГЄГЁ" ----------
+-- ---------- вкладка "Рулетки" ----------
 local function drawCard(i, x, y, w, h)
     local r, rc, on, running = ROULETTES[i], RCOL[i], cfg.on[i], state.running
     if on then fill(x - 2, y - 2, w + 4, h + 4, rc, 18, 0.07) end
@@ -1470,7 +1470,7 @@ local function drawCard(i, x, y, w, h)
     end
     local a = on and 1 or 0.45
 
-    -- ГЇГҐГ°ГҐГЄГ«ГѕГ·Г ГІГҐГ«Гј ГўГЄГ«/ГўГ»ГЄГ« (ГЄГ°ГіГ¦Г®ГЄ Гў ГіГЈГ«Гі)
+    -- переключатель вкл/выкл (кружок в углу)
     if on then
         disc(x + w - 24, y + 24, 10, rc)
         line(x + w - 29, y + 24, x + w - 25, y + 28, K.bg, 2.2)
@@ -1479,7 +1479,7 @@ local function drawCard(i, x, y, w, h)
         ring(x + w - 24, y + 24, 10, K.dim, 1.6, 0.8)
     end
 
-    -- ГЁГЄГ®Г­ГЄГ 
+    -- иконка
     local is = 150
     local ix, iy = x + (w - is) / 2, y + 18
     disc(x + w / 2, iy + is / 2, is * 0.5, rc, on and 0.10 or 0.04)
@@ -1502,35 +1502,35 @@ local function drawCard(i, x, y, w, h)
         end
     end
 
-    -- ГЎГ«Г®ГЄ ГЄГ®Г«ГЁГ·ГҐГ±ГІГўГ 
+    -- блок количества
     local bx, by, bw, bh = x + 14, y + 290, w - 28, 92
     fill(bx, by, bw, bh, K.panel2, 12, on and 1 or 0.5)
     frame(bx, by, bw, bh, K.line, 12, 0.7)
 
     if running then
-        T(bx + bw / 2, by + 10, on and "ГЋГІГЄГ°Г»ГІГ®" or "ГЌГҐ ГўГ»ГЎГ°Г Г­Г ", K.dim, 14, 0.5)
+        T(bx + bw / 2, by + 10, on and "Открыто" or "Не выбрана", K.dim, 14, 0.5)
         if on then
             local tot = cfg.cnt[i]
             T(bx + bw / 2, by + 44, string.format("%d / %s", state.prog[i], cntLabel(tot)), K.text, 24, 0.5, nil, 0.5)
             local frac = (tot >= 9999) and (state.skip[i] and 1 or 0) or clamp(state.prog[i] / math.max(tot, 1), 0, 1)
             fill(bx + 14, by + 72, bw - 28, 8, K.bg, 4)
             if frac > 0 then fill(bx + 14, by + 72, (bw - 28) * frac, 8, rc, 4) end
-            if state.skip[i] then T(bx + bw / 2, by + 28, "Г§Г ГЄГ®Г­Г·ГЁГ«ГЁГ±Гј", K.warn, 12, 0.5) end
+            if state.skip[i] then T(bx + bw / 2, by + 28, "закончились", K.warn, 12, 0.5) end
         end
         return
     end
     if not on then
-        T(bx + bw / 2, by + bh / 2, "ГЌГ Г¦Г¬ГЁГІГҐ, Г·ГІГ®ГЎГ» ГўГЄГ«ГѕГ·ГЁГІГј", K.dim, 14, 0.5, nil, 0.5)
+        T(bx + bw / 2, by + bh / 2, "Нажмите, чтобы включить", K.dim, 14, 0.5, nil, 0.5)
         return
     end
 
-    T(bx + bw / 2 - 20, by + 10, "ГЉГ®Г«ГЁГ·ГҐГ±ГІГўГ®", K.dim, 14, 0.5)
-    -- "Г‚Г±ГҐ"
+    T(bx + bw / 2 - 20, by + 10, "Количество", K.dim, 14, 0.5)
+    -- "Все"
     local all = cfg.cnt[i] >= 9999
     local ac = hit("##all" .. i, bx + bw - 54, by + 6, 46, 24)
     fill(bx + bw - 54, by + 6, 46, 24, all and rc or K.bg, 8, all and 0.35 or 1)
     frame(bx + bw - 54, by + 6, 46, 24, all and rc or K.line, 8, 0.9)
-    T(bx + bw - 31, by + 18, "Г‚Г±ГҐ", all and K.text or K.dim, 13.5, 0.5, nil, 0.5)
+    T(bx + bw - 31, by + 18, "Все", all and K.text or K.dim, 13.5, 0.5, nil, 0.5)
     if ac then setCount(i, all and 10 or 9999) view.edit = nil end
 
     local ry, rh = by + 40, 44
@@ -1569,7 +1569,7 @@ local function drawStartPanel()
     frame(px, py, pw, ph, K.line, 16, 0.7)
     local running = state.running
 
-    -- ГЄГ­Г®ГЇГЄГ  Г§Г ГЇГіГ±ГЄГ 
+    -- кнопка запуска
     local bx, by, bw, bh = px + 14, py + 14, pw - 28, 66
     local clicked, hov, act = hit("##go", bx, by, bw, bh)
     local base = running and K.bad or K.blue
@@ -1577,7 +1577,7 @@ local function drawStartPanel()
     fill(bx, by, bw, bh, base, 16, act and 0.80 or 1)
     fill(bx + 2, by + 2, bw - 4, bh * 0.45, K.white, 14, 0.10)
     frame(bx, by, bw, bh, K.white, 16, 0.18)
-    local label = state.stopping and "ГЋГ±ГІГ Г­Г®ГўГЄГ ..." or (running and "ГЋГ±ГІГ Г­Г®ГўГЁГІГј" or "Г‡Г ГЇГіГ±ГІГЁГІГј")
+    local label = state.stopping and "Остановка..." or (running and "Остановить" or "Запустить")
     local lw = tw(label, 26)
     local lcx, mid = bx + bw / 2 + 16, by + bh / 2
     local left = lcx - lw / 2
@@ -1589,23 +1589,23 @@ local function drawStartPanel()
     T(lcx, mid, label, K.white, 26, 0.5, nil, 0.5)
     if clicked and not pending then pending = running and "stop" or "start" end
 
-    -- ГЇГ®ГїГ±Г­ГҐГ­ГЁГҐ / Г±ГІГ ГІГіГ±
+    -- пояснение / статус
     local iy = by + bh + 22
     ring(px + 28, iy + 9, 9, K.cyan, 1.6, 0.9)
     T(px + 28, iy + 9, "i", K.cyan, 13, 0.5, nil, 0.5)
     local msg, mcol
     if running then
-        msg, mcol = (state.msg ~= "" and state.msg or "Г€Г¤ВёГІ Г®ГІГЄГ°Г»ГІГЁГҐ..."), K.warn
+        msg, mcol = (state.msg ~= "" and state.msg or "Идёт открытие..."), K.warn
     elseif state.msg ~= "" then
         msg = state.msg
         mcol = (state.kind == "success") and K.good or ((state.kind == "error") and K.bad or K.cyan)
     else
-        msg, mcol = "Г‘ГЄГ°ГЁГЇГІ ГЎГіГ¤ГҐГІ Г®ГІГЄГ°Г»ГўГ ГІГј ГіГЄГ Г§Г Г­Г­Г»ГҐ ГЄГ®Г«ГЁГ·ГҐГ±ГІГўГ  Г°ГіГ«ГҐГІГ®ГЄ ГЇГ® ГЇГ®Г°ГїГ¤ГЄГі. ГЏГ®Г±Г«ГҐ Г§Г ГўГҐГ°ГёГҐГ­ГЁГї - ГіГўГҐГ¤Г®Г¬Г«ГҐГ­ГЁГҐ.", K.cyan
+        msg, mcol = "Скрипт будет открывать указанные количества рулеток по порядку. После завершения - уведомление.", K.cyan
     end
     local lines = wrapLines(msg, 14, 196, 4)
     for k, ln in ipairs(lines) do T(px + 46, iy + (k - 1) * 19, ln, mcol, 14, 0, 0.9) end
 
-    -- ГўГ±ГҐГЈГ® ГЄ Г®ГІГЄГ°Г»ГІГЁГѕ
+    -- всего к открытию
     local sx, sy, sw, sh = px + 14, py + 190, pw - 28, 158
     fill(sx, sy, sw, sh, K.panel2, 12)
     frame(sx, sy, sw, sh, K.line, 12, 0.7)
@@ -1615,8 +1615,8 @@ local function drawStartPanel()
             if cfg.cnt[i] >= 9999 then any = true else total = total + cfg.cnt[i] end
         end
     end
-    T(sx + 14, sy + 20, "Г‚Г±ГҐГЈГ® Г°ГіГ«ГҐГІГ®ГЄ ГЄ Г®ГІГЄГ°Г»ГІГЁГѕ", K.text, 14.5, 0, nil, 0.5)
-    T(sx + sw - 14, sy + 20, any and "Г‚Г±ГҐ" or tostring(total), K.cyan, 28, 1, nil, 0.5)
+    T(sx + 14, sy + 20, "Всего рулеток к открытию", K.text, 14.5, 0, nil, 0.5)
+    T(sx + sw - 14, sy + 20, any and "Все" or tostring(total), K.cyan, 28, 1, nil, 0.5)
     line(sx + 14, sy + 42, sx + sw - 14, sy + 42, K.line, 1, 0.7)
     for i = 1, 3 do
         local cy = sy + 68 + (i - 1) * 30
@@ -1629,14 +1629,14 @@ local function drawStartPanel()
         T(sx + sw - 14, cy, val, cfg.on[i] and K.text or K.dim, 16, 1, nil, 0.5)
     end
 
-    -- ГЇГ®Г¤ГЇГЁГ±Гј
+    -- подпись
     local fx, fy = px + pw / 2, py + 462 - 24
     local cc = K.dim
     fill(fx - 9, fy + 4, 18, 4, cc, 1, 0.8)
     dl:AddTriangleFilled(P(fx - 9, fy + 4), P(fx - 9, fy - 6), P(fx - 3, fy + 4), U(cc, 0.8))
     dl:AddTriangleFilled(P(fx - 5, fy + 4), P(fx, fy - 9), P(fx + 5, fy + 4), U(cc, 0.8))
     dl:AddTriangleFilled(P(fx + 9, fy + 4), P(fx + 9, fy - 6), P(fx + 3, fy + 4), U(cc, 0.8))
-    T(fx, py + 392, "Г“Г¤Г Г·ГЁ Гў Г®ГІГЄГ°Г»ГІГЁГЁ!", K.dim, 16, 0.5)
+    T(fx, py + 392, "Удачи в открытии!", K.dim, 16, 0.5)
     T(fx, py + 414, "Auto Roulette by Edward", K.dim, 12, 0.5, 0.7)
 end
 
@@ -1646,8 +1646,8 @@ local function drawRoulettesTab()
     drawStartPanel()
 end
 
--- ---------- ГЇГ°Г®ГЄГ°ГіГ·ГЁГўГ ГҐГ¬Г»ГҐ ГўГЄГ«Г Г¤ГЄГЁ ----------
--- fn(width) Г°ГЁГ±ГіГҐГІ Г±Г®Г¤ГҐГ°Г¦ГЁГ¬Г®ГҐ Г®ГІ (0,0) ГЁ ГўГ®Г§ГўГ°Г Г№Г ГҐГІ ГўГ»Г±Г®ГІГі
+-- ---------- прокручиваемые вкладки ----------
+-- fn(width) рисует содержимое от (0,0) и возвращает высоту
 local function scrollTab(id, fn)
     local x, y, w, h = 22, 150, DW - 44, DH - 150 - 16
     imgui.SetCursorScreenPos(P(x, y))
@@ -1666,18 +1666,18 @@ local function scrollTab(id, fn)
     dl, OX, OY = dl0, ox0, oy0
 end
 
--- ---------- ГўГЄГ«Г Г¤ГЄГ  "Г‘ГІГ ГІГЁГ±ГІГЁГЄГ " ----------
+-- ---------- вкладка "Статистика" ----------
 local function drawStatsContent(cw)
     local y = 0
     fill(0, y, cw, 70, K.panel, 14)
     frame(0, y, cw, 70, K.line, 14, 0.7)
-    T(18, y + 12, "ГЏГ®Г±Г«ГҐГ¤Г­ГЁГ© Г§Г ГЇГіГ±ГЄ", K.cyan, 16)
+    T(18, y + 12, "Последний запуск", K.cyan, 16)
     if lastRun.n > 0 then
-        T(18, y + 36, string.format("ГЋГІГЄГ°Г»ГІГ® %s ГёГІ. Г§Г  %s", fmtNum(lastRun.n), fmtDur(lastRun.t)), K.text, 19)
-        T(cw - 18, y + 12, "ГЏГ®Г«ГіГ·ГҐГ­Г® ГўГЁГ°ГІГ®Гў", K.dim, 13, 1)
+        T(18, y + 36, string.format("Открыто %s шт. за %s", fmtNum(lastRun.n), fmtDur(lastRun.t)), K.text, 19)
+        T(cw - 18, y + 12, "Получено виртов", K.dim, 13, 1)
         T(cw - 18, y + 34, "+" .. fmtNum(lastRun.v), K.good, 20, 1)
     else
-        T(18, y + 36, "Г‡Г ГЇГіГ±ГЄГ®Гў ГЇГ®ГЄГ  Г­ГҐ ГЎГ»Г«Г®", K.dim, 17)
+        T(18, y + 36, "Запусков пока не было", K.dim, 17)
     end
     y = y + 82
 
@@ -1693,20 +1693,20 @@ local function drawStatsContent(cw)
         end
         T(94, y + 12, r.name, rc, 21)
         if St.opened > 0 then
-            T(94, y + 42, string.format("ГЋГІГЄГ°Г»ГІГ® %s ГёГІ. Г§Г  %s", fmtNum(St.opened), fmtDur(St.time)), K.text, 18)
-            T(94, y + 66, string.format("Г‚ Г±Г°ГҐГ¤Г­ГҐГ¬ %s Г­Г  Г°ГіГ«ГҐГІГЄГі", fmtDur(St.time / St.opened)), K.dim, 14)
+            T(94, y + 42, string.format("Открыто %s шт. за %s", fmtNum(St.opened), fmtDur(St.time)), K.text, 18)
+            T(94, y + 66, string.format("В среднем %s на рулетку", fmtDur(St.time / St.opened)), K.dim, 14)
         else
-            T(94, y + 42, "Г…Г№Вё Г­ГҐ Г®ГІГЄГ°Г»ГўГ Г«Г Г±Гј", K.dim, 17)
+            T(94, y + 42, "Ещё не открывалась", K.dim, 17)
         end
-        local mp = St.prizes["inv:Г„ГҐГ­ГјГЈГЁ"]
+        local mp = St.prizes["inv:Деньги"]
         if mp and mp.sum > 0 then
-            T(cw - 60, y + 66, "Г‚ГЁГ°ГІГ»: +" .. fmtNum(mp.sum), K.good, 15, 1)
+            T(cw - 60, y + 66, "Вирты: +" .. fmtNum(mp.sum), K.good, 15, 1)
         end
         if St.lastN > 0 then
-            T(cw - 60, y + 16, "ГЏГ®Г±Г«ГҐГ¤Г­ГЁГ© Г§Г ГЇГіГ±ГЄ", K.dim, 13, 1)
-            T(cw - 60, y + 36, string.format("%s ГёГІ. Г§Г  %s", fmtNum(St.lastN), fmtDur(St.lastT)), K.text, 16, 1)
+            T(cw - 60, y + 16, "Последний запуск", K.dim, 13, 1)
+            T(cw - 60, y + 36, string.format("%s шт. за %s", fmtNum(St.lastN), fmtDur(St.lastT)), K.text, 16, 1)
         end
-        -- Г±ГІГ°ГҐГ«ГЄГ  Г°Г Г±ГЄГ°Г»ГІГЁГї
+        -- стрелка раскрытия
         local ax, ay = cw - 30, y + hh / 2
         if open then
             dl:AddTriangleFilled(P(ax - 8, ay + 4), P(ax + 8, ay + 4), P(ax, ay - 6), U(K.dim))
@@ -1724,7 +1724,7 @@ local function drawStatsContent(cw)
                 return a.name < b.name
             end)
             if #list == 0 then
-                T(18, y + 4, "ГЏГ°ГЁГ§Г» ГЇГ®ГЄГ  Г­ГҐ Г§Г ГЇГЁГ±Г Г­Г»", K.dim, 15)
+                T(18, y + 4, "Призы пока не записаны", K.dim, 15)
                 y = y + 34
             else
                 local colW = (cw - 14) / 2
@@ -1737,8 +1737,8 @@ local function drawStatsContent(cw)
                     T(cx + 14, cy + 8, p.name, K.text, 16)
                     clipEnd()
                     T(cx + colW - 12, cy + 7, string.format("%.1f%%", pct), K.cyan, 18, 1)
-                    T(cx + colW - 12, cy + 27, (p.name == "Г„ГҐГ­ГјГЈГЁ" and string.format("%s Г°Г Г§, +%s ГўГЁГ°ГІ", fmtNum(p.count), fmtNum(p.sum))
-                        or string.format("ГўГ»ГЇГ Г«Г® %s Г°Г Г§", fmtNum(p.count))), K.dim, 12.5, 1)
+                    T(cx + colW - 12, cy + 27, (p.name == "Деньги" and string.format("%s раз, +%s вирт", fmtNum(p.count), fmtNum(p.sum))
+                        or string.format("выпало %s раз", fmtNum(p.count))), K.dim, 12.5, 1)
                     fill(cx + 12, cy + 36, colW - 150, 4, K.bg, 2)
                     if pct > 0 then fill(cx + 12, cy + 36, (colW - 150) * math.min(pct / 100, 1), 4, rc, 2) end
                 end
@@ -1748,19 +1748,19 @@ local function drawStatsContent(cw)
         y = y + 6
     end
 
-    -- Г±ГЎГ°Г®Г±
+    -- сброс
     local armed = os.clock() - view.confirm < 4
     local clicked = hit("##reset", 0, y, cw, 50)
     fill(0, y, cw, 50, armed and K.bad or K.panel, 14, armed and 0.9 or 1)
     frame(0, y, cw, 50, armed and K.bad or K.line, 14, 0.8)
-    T(cw / 2, y + 25, armed and "ГЌГ Г¦Г¬ГЁГІГҐ ГҐГ№Вё Г°Г Г§ - Г±ГЎГ°Г®Г±ГЁГІГј ГўГ±Вё" or "Г‘ГЎГ°Г®Г±ГЁГІГј Г±ГІГ ГІГЁГ±ГІГЁГЄГі", K.text, 17, 0.5, nil, 0.5)
+    T(cw / 2, y + 25, armed and "Нажмите ещё раз - сбросить всё" or "Сбросить статистику", K.text, 17, 0.5, nil, 0.5)
     if clicked then
         if armed then resetStats() view.confirm = 0 else view.confirm = os.clock() end
     end
     return y + 50
 end
 
--- ---------- ГўГЄГ«Г Г¤ГЄГ  "ГЌГ Г±ГІГ°Г®Г©ГЄГЁ" ----------
+-- ---------- вкладка "Настройки" ----------
 local function settingCard(x, y, w, h, title, desc)
     fill(x, y, w, h, K.panel, 14)
     frame(x, y, w, h, K.line, 14, 0.7)
@@ -1778,23 +1778,23 @@ local function drawSettingsContent(cw)
     local colW = (cw - 14) / 2
     local x2 = colW + 14
 
-    settingCard(0, 0, colW, 100, "ГЊГ Г±ГёГІГ ГЎ Г¬ГҐГ­Гѕ", "ГђГ Г§Г¬ГҐГ° Г®ГЄГ­Г  Г­Г  ГЅГЄГ°Г Г­ГҐ")
+    settingCard(0, 0, colW, 100, "Масштаб меню", "Размер окна на экране")
     valueStepper("scale", colW - 18 - 170, 30, cfg.scale .. "%",
         function(d) cfg.scale = clamp(cfg.scale + d * 5, 50, 100) markDirty() end,
         function(d) cfg.scale = clamp(cfg.scale + d * 5, 50, 100) markDirty() end)
 
-    settingCard(x2, 0, colW, 100, "ГЏГ ГіГ§Г  ГЇГҐГ°ГҐГ¤ Г§Г ГЎГ®Г°Г®Г¬ ГЇГ°ГЁГ§Г ", "Г‘ГҐГЄГіГ­Г¤Г», 0 = Г±Г°Г Г§Гі")
-    valueStepper("pause", x2 + colW - 18 - 170, 30, cfg.anim .. " Г±ГҐГЄ.",
+    settingCard(x2, 0, colW, 100, "Пауза перед забором приза", "Секунды, 0 = сразу")
+    valueStepper("pause", x2 + colW - 18 - 170, 30, cfg.anim .. " сек.",
         function(d) cfg.anim = clamp(cfg.anim + d, 0, 20) markDirty() end,
         function(d) cfg.anim = clamp(cfg.anim + d, 0, 20) markDirty() end)
 
-    settingCard(0, 114, cw, 100, "Г‘Г®Г®ГЎГ№ГҐГ­ГЁГї Гў Г·Г ГІ", "Г€ГІГ®ГЈГЁ ГЁ Г®ГёГЁГЎГЄГЁ ГЇГ®Г±Г«ГҐ Г®ГІГЄГ°Г»ГІГЁГї")
+    settingCard(0, 114, cw, 100, "Сообщения в чат", "Итоги и ошибки после открытия")
     if switch("##sw_notify", cw - 18 - 56, 114 + 35, cfg.notify) then cfg.notify = not cfg.notify markDirty() end
 
     return 214
 end
 
--- ---------- Г®ГЄГ­Г® ----------
+-- ---------- окно ----------
 local function drawWindow()
     fill(0, 0, DW, DH, K.bg, 22)
     frame(0, 0, DW, DH, K.blue, 22, 0.75)
@@ -1845,14 +1845,14 @@ function main()
     loadConfig()
     pcall(loadStats)
     sampRegisterChatCommand("rul", function() ui.main[0] = not ui.main[0] end)
-    say("Auto Roulette v3.0 {FF0000}By Edward{FFFFFF}  |  Г¬ГҐГ­Гѕ: {FF0000}/rul")
+    say("Auto Roulette v3.0 {FF0000}By Edward{FFFFFF}  |  меню: {FF0000}/rul")
 
     while true do
         wait(50)
         if pending then
             if not pcall(runPending) then
                 pending = nil
-                setMsg("Г‚Г­ГіГІГ°ГҐГ­Г­ГїГї Г®ГёГЁГЎГЄГ , ГЇГ®ГЇГ°Г®ГЎГіГ©ГІГҐ ГҐГ№Вё Г°Г Г§", "error")
+                setMsg("Внутренняя ошибка, попробуйте ещё раз", "error")
             end
         end
         if dirtyAt and os.clock() - dirtyAt > 1 then
