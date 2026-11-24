@@ -1,6 +1,6 @@
 script_name('Vehicle Rename Mobile')
 script_author('Edward')
-script_version('1.0')
+script_version('2.0')
 
 require 'lib.moonloader'
 local imgui = require 'mimgui'
@@ -18,8 +18,6 @@ local DPI = max(1, min(tonumber(MONET_DPI_SCALE) or 2.5, 4))
 local function d(v) return floor(v * DPI + 0.5) end
 
 local IFACE = 91
-local MODES = { 'inplace', 'emulate', 'emulate220' }
-local mode = 1
 local TOLERANCE = 350
 local CONFIG = getWorkingDirectory() .. '/config/VehicleRename_mobile.tsv'
 
@@ -29,7 +27,7 @@ local enabled = true
 local menuOpen, inDetail = false, false
 local cur
 local dirty = false
-local stats = { chunks = 0, replaced = 0, detail = 0, looped = 0, tooBig = 0 }
+local stats = { tooBig = 0, trimmed = 0 }
 local panel = new.bool(false)
 local input = new.char[128]()
 local focusFrames = 0
@@ -37,12 +35,6 @@ local lingerUntil = 0
 
 local function msg(text)
     sampAddChatMessage('{D2772C}[VehRename] {FFFFFF}' .. u8:decode(text), -1)
-end
-
-local function cpToUtf8(cp)
-    if cp < 0x80 then return string.char(cp) end
-    if cp < 0x800 then return string.char(0xC0 + floor(cp / 64), 0x80 + cp % 64) end
-    return string.char(0xE0 + floor(cp / 4096), 0x80 + floor(cp / 64) % 64, 0x80 + cp % 64)
 end
 
 local function encodeName(s)
@@ -163,7 +155,6 @@ local function parseItems(text)
     eachItem(text, function(_, _, obj, idx, from, last)
         local labels = obj:match('"labels"%s*:%s*(%b[])') or ''
         local raw = obj:sub(from, last - 1)
-        local fuel = labels:match('"title"%s*:%s*"([^"]*)"%s*,%s*"icon"%s*:%s*"icon%-fuel"') or ''
         listItems[idx] = {
             idx = idx, raw = raw, title = u8(raw),
             sys = obj:match('"sysName"%s*:%s*"?(%d+)'),
@@ -238,9 +229,6 @@ local function computeAssign()
         end
     end
 
-    local count = 0
-    for _ in pairs(assign) do count = count + 1 end
-    stats.replaced = count
     assignRec = owner
     return assign
 end
@@ -277,22 +265,23 @@ end
 
 local canEmulate = type(raknetEmulPacketReceiveBitStream) == 'function'
 
-local function emulating()
-    return mode > 1 and canEmulate
-end
-
 local function emit(iface, sub, text)
+    local pack = #text > 1024
     local mark = mine[text] or { count = 0 }
     mark.count, mark.time = mark.count + 1, os.clock()
     mine[text] = mark
     local bs = raknetNewBitStream()
-    if mode == 3 then raknetBitStreamWriteInt8(bs, 220) end
     raknetBitStreamWriteInt8(bs, 84)
     raknetBitStreamWriteInt8(bs, iface)
     raknetBitStreamWriteInt8(bs, sub)
     raknetBitStreamWriteInt16(bs, #text)
-    raknetBitStreamWriteInt8(bs, 0)
-    raknetBitStreamWriteString(bs, text)
+    if pack then
+        raknetBitStreamWriteInt8(bs, 1)
+        raknetBitStreamEncodeString(bs, text)
+    else
+        raknetBitStreamWriteInt8(bs, 0)
+        raknetBitStreamWriteString(bs, text)
+    end
     raknetEmulPacketReceiveBitStream(220, bs)
     raknetDeleteBitStream(bs)
 end
@@ -355,11 +344,11 @@ local function titleOf(name)
 end
 
 local function deliver(bs, packet, text)
-    if emulating() then
+    if rewriteInPlace(bs, packet, text) then return end
+    if canEmulate then
         emit(packet.iface, packet.sub, text)
         return false
     end
-    if rewriteInPlace(bs, packet, text) then return end
     stats.tooBig = stats.tooBig + 1
 end
 
@@ -374,6 +363,78 @@ local function nameOfCurrent()
     if cur.uid and cars[cur.uid] then return cars[cur.uid].name end
 end
 
+local function utf8Len(s)
+    return select(2, s:gsub('[^\128-\191]', ''))
+end
+
+local function utf8Sub(s, n)
+    local i, c = 1, 0
+    while i <= #s and c < n do
+        local b = s:byte(i)
+        i = i + (b >= 240 and 4 or b >= 224 and 3 or b >= 192 and 2 or 1)
+        c = c + 1
+    end
+    return s:sub(1, i - 1)
+end
+
+local LOOK = {
+    { '\208\176', 'a' }, { '\208\181', 'e' }, { '\208\190', 'o' }, { '\209\128', 'p' },
+    { '\209\129', 'c' }, { '\209\131', 'y' }, { '\209\133', 'x' },
+    { '\208\144', 'A' }, { '\208\146', 'B' }, { '\208\149', 'E' }, { '\208\154', 'K' },
+    { '\208\156', 'M' }, { '\208\157', 'H' }, { '\208\158', 'O' }, { '\208\160', 'P' },
+    { '\208\161', 'C' }, { '\208\162', 'T' }, { '\208\163', 'Y' }, { '\208\165', 'X' },
+}
+
+local function lookalike(s)
+    for _, p in ipairs(LOOK) do s = s:gsub(p[1], p[2]) end
+    return s
+end
+
+local NO_PLATE = '"' .. encodeName('Без номеров') .. '"'
+local NO_PLATE_LOOK = '"' .. encodeName(lookalike('Без номеров')) .. '"'
+local NO_PLATE_SHORT = '"' .. encodeName('Б/н') .. '"'
+local MAX_LEVEL = 2
+
+local function buildList(text, assign, level, exact)
+    local names = assign
+    if level > 0 and not exact then
+        names = {}
+        for k, n in pairs(assign) do names[k] = lookalike(n) end
+    end
+    local out = patchChunk(text, names)
+    if not out then return nil, names end
+    if level >= 1 then out = replacePlain(out, NO_PLATE, level >= 2 and NO_PLATE_SHORT or NO_PLATE_LOOK) end
+    return out, names
+end
+
+local function deliverList(bs, packet, text, assignAll)
+    local assign = {}
+    eachItem(text, function(_, _, _, idx)
+        if assignAll[idx] then assign[idx] = assignAll[idx] end
+    end)
+    if not next(assign) then return end
+
+    for level = 0, MAX_LEVEL do
+        local out = buildList(text, assign, level)
+        if not out then return end
+        if rewriteInPlace(bs, packet, out) then return end
+    end
+
+    local _, base = buildList(text, assign, MAX_LEVEL)
+    local longest = 0
+    for _, n in pairs(base) do longest = max(longest, utf8Len(n)) end
+    for limit = longest - 1, 1, -1 do
+        local short = {}
+        for k, n in pairs(base) do short[k] = utf8Sub(n, limit) end
+        local out = buildList(text, short, MAX_LEVEL, true)
+        if out and rewriteInPlace(bs, packet, out) then
+            stats.trimmed = stats.trimmed + 1
+            return
+        end
+    end
+    stats.tooBig = stats.tooBig + 1
+end
+
 local function onReceive(id, bs)
     if id ~= 220 then return end
     local packet = readPacket(bs)
@@ -385,7 +446,6 @@ local function onReceive(id, bs)
         if packet.opened then
             cur = nil
             listItems = {}
-            stats.chunks = 0
         else
             panel[0] = false
         end
@@ -397,24 +457,18 @@ local function onReceive(id, bs)
     local mark = mine[text]
     if mark then
         mine[text] = nil
-        if os.clock() - mark.time < 0.5 then
-            stats.looped = stats.looped + 1
-            return
-        end
+        if os.clock() - mark.time < 0.5 then return end
     end
 
     if text:find('"sysName"', 1, true) and text:match('^%s*%[') then
         parseItems(text)
-        stats.chunks = stats.chunks + 1
         if not enabled or not next(cars) then return end
-        local out = patchChunk(text, computeAssign())
+        local assign = computeAssign()
         if dirty then saveConfig() end
-        if out then return deliver(bs, packet, out) end
-        return
+        return deliverList(bs, packet, text, assign)
     end
 
     if cur and cur.raw and (text == cur.raw or text:find('"' .. cur.raw .. '"', 1, true)) then
-        stats.detail = stats.detail + 1
         local name = enabled and nameOfCurrent()
         local out = name and withName(text, name)
         if out then return deliver(bs, packet, out) end
@@ -442,6 +496,16 @@ local function onSend(id, bs)
         panel[0] = false
     end
 end
+
+local function guarded(fn)
+    return function(...)
+        local ok, res = pcall(fn, ...)
+        if ok then return res end
+        stats.lastErr = tostring(res)
+        return nil
+    end
+end
+onReceive, onSend = guarded(onReceive), guarded(onSend)
 
 if not pcall(addEventHandler, 'onReceivePacket', onReceive) then onReceivePacket = onReceive end
 if not pcall(addEventHandler, 'onSendPacket', onSend) then onSendPacket = onSend end
@@ -477,7 +541,16 @@ local function applyName(name)
         assignRec[cur.idx] = nil
         cur.uid = nil
     elseif item and item.sys then
-        local uid = cur.uid or nextUid()
+        local uid = cur.uid
+        if not uid then
+            for k, r in pairs(cars) do
+                if r.sys == item.sys and r.idx == item.idx and r.title == item.title then
+                    uid = k
+                    break
+                end
+            end
+        end
+        uid = uid or nextUid()
         local prev = cars[uid]
         local loaded = item.status == 'loaded'
         cars[uid] = {
@@ -628,35 +701,26 @@ function main()
         end
     end)
 
-    sampRegisterChatCommand('vmode', function()
-        mode = mode % #MODES + 1
-        if mode > 1 and not canEmulate then mode = 1 end
-        msg('Режим подмены пакетов: ' .. MODES[mode])
-    end)
-
     sampRegisterChatCommand('vrt', function()
         enabled = not enabled
         msg('Подмена названий: ' .. (enabled and 'вкл' or 'выкл'))
-    end)
-
-    sampRegisterChatCommand('vdbg', function()
-        msg(('Подмена пакетов: %s | чанков списка: %d | переименовано: %d | пакетов с названием в деталях: %d'):format(
-            MODES[mode], stats.chunks, stats.replaced, stats.detail))
-        local known = 0
-        for _ in pairs(cars) do known = known + 1 end
-        msg(('Записей имён: %d | не поместилось в пакет: %d | эмулированных пакетов дошло обратно: %d'):format(known, stats.tooBig, stats.looped))
-        if cur then
-            msg(('Выбрана машина #%d: %s | запись: %s'):format(cur.idx, cur.title, cur.uid or 'нет'))
-        end
     end)
 
     msg('Загружен. В меню транспорта нажмите «Переименовать» или /vname {73B8FF}By {FF7A7A}Edward')
     while true do
         wait(100)
         if dirty then saveConfig() end
+        if stats.lastErr and stats.lastErr ~= stats.toldErr then
+            stats.toldErr = stats.lastErr
+            pcall(msg, 'Ошибка: ' .. stats.lastErr:sub(1, 160))
+        end
+        if stats.trimmed > 0 and not stats.toldTrim then
+            stats.toldTrim = true
+            msg('Название длинное: в списке оно показано сокращённым, в карточке машины полностью')
+        end
         if stats.tooBig > 0 and not stats.told then
             stats.told = true
-            msg('Название не помещается в пакет и не будет показано. Сделайте его короче')
+            msg('Название не поместилось в пакет и не будет показано. Попробуйте название короче')
         end
     end
 end
