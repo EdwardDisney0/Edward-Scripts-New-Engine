@@ -335,7 +335,7 @@ local GITHUB = {
     raw           = "https://raw.githubusercontent.com/",
     api           = "https://api.github.com/repos/",
     scripts_list  = "Sscripts.json",
-    script_center = "Edward%20Script%20Center.lua",
+    script_center = "Edward%20Script%20Center%20Mobile.lua",
     version       = "version.json",
     notification  = "notification.json",
 }
@@ -466,12 +466,13 @@ local function httpGetAsync(url, on_success, on_error)
             waited = waited + 50
 
             if data_received and waited > 1500 then break end
-            if waited > 12000 then break end
+            if waited > 25000 then break end
         end
         wait(30)
+        local complete = finished or data_received
         if doesFileExist(tmp_path) then
             local f = io.open(tmp_path, "rb")
-            if f then content = cleanBody(f:read("*a")); f:close() end
+            if f then local raw = f:read("*a"); f:close(); content = complete and cleanBody(raw) or "" end
             os.remove(tmp_path)
         end
     end
@@ -568,6 +569,8 @@ end
 
 local main_window         = imgui.new.bool(false)
 local notification_window = imgui.new.bool(false)
+local notif_open_pending = false   -- open request from bg thread, consumed in render frame
+local notif_focus_done = false
 
 local main_active_tab = 0
 
@@ -1026,11 +1029,11 @@ function checkForNotification(no_wait)
                     end
                 end
                 if ver_mismatch then
-                    wait(2000); notification_window[0]=true; has_new_notification=true
+                    wait(2000); notif_open_pending=true; has_new_notification=true
                     notify("{FF0000}|{FFFFFF} {FF0000}ВНИМАНИЕ! {FFFFFF}Требуется обновление {C0C0C0}Script Center! {FFFFFF}Откройте {C0C0C0}/ec")
                     saveNotificationCache("VERSION_CHECK_"..github_req_ver, github_message)
                 elseif github_pass ~= (cached.pass or "") then
-                    notification_window[0]=true; has_new_notification=true
+                    notif_open_pending=true; has_new_notification=true
                     notify("{FF0000}|{FFFFFF} {FFFFFF}Новое уведомление от {C0C0C0}разработчика! {FFFFFF}Откройте {C0C0C0}/ec")
                 else
                     has_new_notification=false
@@ -1344,6 +1347,8 @@ function downloadScriptCenterUpdate(new_version)
         function(response)
             local content = response.content or response.text
             if not su.valid(content) then fail("Ошибка: скачанный файл пуст или повреждён!"); return end
+            local ld = loadstring or load
+            if not ld(content) then fail("Ошибка: скачанный скрипт повреждён (синтаксис)!"); return end
             su.set("install", 0.72)
 
             
@@ -3710,6 +3715,7 @@ local function openNotification()
     STYLE_DIRTY = true
     notification_window[0] = true
     notif_closing = false
+    notif_focus_done = false
 end
 local function closeNotification()
     notif_closing = true
@@ -4584,7 +4590,10 @@ imgui.OnFrame(function() return main_window[0] end, function()
     UI_ALPHA = 1
 end)
 
-imgui.OnFrame(function() return notification_window[0] end, function()
+imgui.OnFrame(function()
+    if notif_open_pending then notif_open_pending = false; openNotification() end
+    return notification_window[0]
+end, function()
     tickDt()
     applyBaseStyle()
     anim.notif = approach(anim.notif, notif_closing and 0 or 1, 6)
@@ -4613,7 +4622,7 @@ imgui.OnFrame(function() return notification_window[0] end, function()
 
     imgui.SetNextWindowPos(V2(sw/2, sh/2 + (1 - a)*24), imgui.Cond.Always, V2(0.5, 0.5))
     imgui.SetNextWindowSize(V2(W, H), imgui.Cond.Always)
-    imgui.SetNextWindowFocus()
+    if not notif_focus_done then imgui.SetNextWindowFocus(); notif_focus_done = true end
     imgui.PushStyleVarFloat(imgui.StyleVar.Alpha, math.max(a, 0.001))
     imgui.PushStyleVarVec2(imgui.StyleVar.WindowPadding, V2(0, 0))
     imgui.PushStyleVarFloat(imgui.StyleVar.WindowRounding, 14)
@@ -4931,6 +4940,12 @@ function main()
         escStep("checkForNotification", checkForNotification, true)
         wait(250)
         escStep("checkScriptCenterUpdate", checkScriptCenterUpdate, true)
+        while true do
+            wait(1800000)
+            if not update_in_progress and not update_done then
+                escStep("checkScriptCenterUpdate", checkScriptCenterUpdate, true)
+            end
+        end
     end)
     wait(-1)
 end
