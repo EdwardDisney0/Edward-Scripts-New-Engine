@@ -1,6 +1,6 @@
 script_name("Edward Script Center Mobile")
 script_author("EdwardDisney0")
-script_version("2.7")
+script_version("2.8")
 
 require "lib.moonloader"
 local imgui = require("mimgui")
@@ -327,7 +327,7 @@ end
 encoding.default = 'CP1251'
 u8 = encoding.UTF8
 
-CURRENT_VERSION = "2.7"
+CURRENT_VERSION = "2.8"
 
 local GITHUB = {
     repo          = "EdwardDisney0/Edward-Scripts-New-Engine",
