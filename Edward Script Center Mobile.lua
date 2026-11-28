@@ -1,6 +1,6 @@
 script_name("Edward Script Center Mobile")
 script_author("EdwardDisney0")
-script_version("2.9")
+script_version("3.0")
 
 require "lib.moonloader"
 local imgui = require("mimgui")
@@ -327,24 +327,19 @@ end
 encoding.default = 'CP1251'
 u8 = encoding.UTF8
 
-CURRENT_VERSION = "2.9"
+CURRENT_VERSION = "3.0"
 
 local GITHUB = {
     repo          = "EdwardDisney0/Edward-Scripts-New-Engine",
     branch        = "main",
     raw           = "https://raw.githubusercontent.com/",
-    api           = "https://api.github.com/repos/",
     scripts_list  = "Sscripts.json",
     script_center = "Edward%20Script%20Center%20Mobile.lua",
     version       = "version.json",
     notification  = "notification.json",
 }
-local repo_sha      = nil
 
 local function rawUrl(path)
-    if repo_sha then
-        return GITHUB.raw .. GITHUB.repo .. "/" .. repo_sha .. "/" .. path
-    end
     return GITHUB.raw .. GITHUB.repo .. "/" .. GITHUB.branch .. "/" .. path .. "?t=" .. os.time()
 end
 
@@ -461,11 +456,10 @@ local function httpGetAsync(url, on_success, on_error)
     local content = ""
     if okd then
         local waited = 0
-        while not finished do
+        while not finished and not data_received do
             wait(50)
             waited = waited + 50
 
-            if data_received and waited > 1500 then break end
             if waited > 25000 then break end
         end
         wait(30)
@@ -569,7 +563,7 @@ end
 
 local main_window         = imgui.new.bool(false)
 local notification_window = imgui.new.bool(false)
-local notif_open_pending = false   -- open request from bg thread, consumed in render frame
+local notif_open_pending = false
 
 local main_active_tab = 0
 
@@ -710,15 +704,6 @@ local function countInstalledScripts()
         end
     end
     return n
-end
-
-function syncWithGitHub()
-    local new_sha = nil
-    httpGetAsync(GITHUB.api .. GITHUB.repo .. "/git/refs/heads/" .. GITHUB.branch .. "?t=" .. os.time(),
-        function(r) new_sha = (r.text or ""):match('"sha"%s*:%s*"(%x+)"') end,
-        function(err) end)
-    if new_sha then repo_sha = new_sha; return true end
-    return false
 end
 
 local function lower1251(str)
@@ -1435,7 +1420,6 @@ function manualRefresh()
     if manual_busy or loading or update_in_progress then return end
     manual_busy = true
     lua_thread.create(function()
-        syncWithGitHub()
         loadScriptsListNow(false, true)
         checkForNotification(true)
         checkScriptCenterUpdate(false)
@@ -3185,7 +3169,63 @@ wrapTextRaw = function(font, s, maxw, maxlines)
 end
 end
 
+do
+    local last_text, last_font, last_width, last_scale, last_rows, last_height
+    function UIX.notificationLayout(text, font, width)
+        text = tostring(text or "")
+        if text == last_text and font == last_font and width == last_width and UIX.S == last_scale then
+            return last_rows, last_height
+        end
+        local body = text:gsub("\r\n", "\n"):gsub("\r", "\n")
+        body = body:gsub("([%.%!%?]) +([A-Z\192-\223\168])", "%1\n\n%2")
+        body = body:gsub("\n[ \t]*\n[ \t\n]*", "\n\n")
+        body = body:gsub("^%s+", ""):gsub("%s+$", "")
+        local rows, height = {}, 0
+        for paragraph in (body .. "\n"):gmatch("(.-)\n") do
+            if paragraph == "" then
+                rows[#rows + 1] = ""
+                height = height + 12
+            else
+                for _, line in ipairs(wrapText(font, U(paragraph), width)) do
+                    rows[#rows + 1] = line
+                    height = height + 25
+                end
+            end
+        end
+        last_text, last_font, last_width, last_scale = text, font, width, UIX.S
+        last_rows, last_height = rows, height
+        return rows, height
+    end
+end
+
+UIX.mainDrag = { active = false, dx = 0, dy = 0 }
+
+function UIX.dragMain(sw, sh, offset)
+    local drag = UIX.mainDrag
+    local minX, maxX = -154, math.max(-154, sw - 114)
+    local maxY = math.max(0, sh - 94)
+    main_pos.x = math.max(minX, math.min(maxX, main_pos.x))
+    main_pos.y = math.max(0, math.min(maxY, main_pos.y))
+    if notification_window[0] or UIX.su.show or anim.main_target ~= 1 then
+        drag.active = false
+        return
+    end
+    local io = imgui.GetIO()
+    if not io.MouseDown[0] then drag.active = false; return end
+    local mx, my = io.MousePos.x / UIX.S, io.MousePos.y / UIX.S
+    if imgui.IsMouseClicked(0) then
+        local x, y = main_pos.x + 14, main_pos.y + offset + 14
+        drag.active = mx >= x and mx <= x + 240 and my >= y and my <= y + 80
+        if drag.active then drag.dx, drag.dy = mx - main_pos.x, my - main_pos.y - offset end
+    end
+    if drag.active then
+        main_pos.x = math.max(minX, math.min(maxX, mx - drag.dx))
+        main_pos.y = math.max(0, math.min(maxY, my - drag.dy - offset))
+    end
+end
+
 UIX.onScale = function()
+    UIX.mainDrag.active = false
     clearTexts()
     main_pos = nil
     STYLE_DIRTY = true
@@ -3708,6 +3748,7 @@ local function openMainWindow()
     anim.main_target = 1
 end
 local function closeMainWindow()
+    UIX.mainDrag.active = false
     anim.main_target = 0
 end
 local function openNotification()
@@ -4403,6 +4444,7 @@ imgui.OnFrame(function() return main_window[0] end, function()
     local sw, sh = UIX.screen()
     local W, H = UIX.winSize(sw, sh)
     if not main_pos then main_pos = V2((sw - W)/2, (sh - H)/2) end
+    UIX.dragMain(sw, sh, (1 - ma)*28)
     imgui.SetNextWindowPos(V2(main_pos.x, main_pos.y + (1 - ma)*28), imgui.Cond.Always)
     imgui.SetNextWindowSize(V2(W, H), imgui.Cond.Always)
     imgui.PushStyleVarFloat(imgui.StyleVar.Alpha, math.max(ma, 0.001))
@@ -4452,7 +4494,7 @@ imgui.OnFrame(function() return main_window[0] end, function()
     local scw = TS(F.logo, "Script ").x
     T(dl, F.logo, sx0+16,       top+40, CL.red,   "Script ")
     T(dl, F.logo, sx0+16 + scw, top+40, CL.white, "Center")
-    T(dl, F.small, sx0+17, top+74, CL.grey, U"Скрипты для твоей игры")
+    T(dl, F.small, sx0+17, top+74, CL.grey, fitText(F.small, U"Зажмите заголовок и двигайте", SIDE_W - 32))
 
     local navTop = top + 102
     local navH   = colH - 102 - 60
@@ -4561,10 +4603,20 @@ imgui.OnFrame(function() return main_window[0] end, function()
             T(ldl, F.reg, p.x + (list_w - TS(F.reg, msg).x)/2, p.y + 40, CL.grey, msg)
             imgui.Dummy(V2(list_w, 80))
         end
-        for i, s in ipairs(filtered_scripts) do
-            imgui.PushIDInt(i)
-            drawScriptCard(s)
-            imgui.PopID()
+        if #filtered_scripts > 0 then
+            local origin = imgui.GetCursorScreenPos()
+            local spacing = imgui.GetStyle().ItemSpacing.y / UIX.S
+            local stride = 96 + spacing
+            local count = #filtered_scripts
+            local first = math.max(1, math.min(count, math.floor((UIX.clip0 - origin.y) / stride)))
+            local last = math.max(first, math.min(count, math.ceil((UIX.clip1 - origin.y) / stride) + 1))
+            if first > 1 then imgui.Dummy(V2(list_w, (first - 1) * stride - spacing)) end
+            for i = first, last do
+                imgui.PushIDInt(i)
+                drawScriptCard(filtered_scripts[i])
+                imgui.PopID()
+            end
+            if last < count then imgui.Dummy(V2(list_w, (count - last) * stride - spacing)) end
         end
         imgui.EndChild()
 
@@ -4606,14 +4658,8 @@ end, function()
     local sw, sh = UIX.screen()
 
     local W = math.min(580, sw - 24)
-    pushF(F.reg)
-    local lines = {}
-    for para in (U(notification_text or "") .. "\n"):gmatch("(.-)\n") do
-        if para == "" then lines[#lines+1] = ""
-        else for _, ln in ipairs(wrapText(F.reg, para, W - 48)) do lines[#lines+1] = ln end end
-    end
-    popF(F.reg)
-    local textH = math.min(#lines * 25, math.max(100, math.min(380, sh - 220)))
+    local lines, contentH = UIX.notificationLayout(notification_text, F.reg, W - 48)
+    local textH = math.min(contentH, math.max(100, math.min(380, sh - 220)))
     local H = 96 + textH + 84
 
     local bg = imgui.GetBackgroundDrawList()
@@ -4642,11 +4688,14 @@ end, function()
     dl:AddCircleFilled(V2(x + 22, y + 22), 22, ACC.t(0.3), 32)
     dl:AddCircle(V2(x + 22, y + 22), 22, ACC.k(0.95), 32, 1.5)
     IC.bell(dl, x + 22, y + 22, 20, CL.white)
-    T(dl, F.h1, x + 58, y + 2, CL.white, U"Сообщение от разработчика")
+    T(dl, F.reg, x + 58, y + 2, CL.white, U"Сообщение от разработчика")
     local sub = (notification_required_version ~= "")
         and U("Требуется версия v" .. notification_required_version .. " (у вас v" .. loadSavedVersion() .. ")")
         or U"Edward Script Center Mobile"
-    T(dl, F.small, x + 58, y + 26, (notification_required_version ~= "") and col(255,110,110) or CL.grey, sub)
+    imgui.SetCursorScreenPos(V2(x + 58, y + 26))
+    imgui.PushStyleColor(imgui.Col.Text, (notification_required_version ~= "") and v4(255,110,110,255) or v4(150,150,158,255))
+    imgui.TextUnformatted(sub)
+    imgui.PopStyleColor()
     y = wp.y + 84
     dl:AddLine(V2(wp.x + 24, y), V2(wp.x + W - 24, y), col(45,45,52), 1)
 
@@ -4657,8 +4706,8 @@ end, function()
     local cdl = imgui.GetWindowDrawList()
     for _, ln in ipairs(lines) do
         local p = imgui.GetCursorScreenPos()
-        T(cdl, F.reg, p.x, p.y, col(210,210,216), ln)
-        imgui.Dummy(V2(W - 48, 25))
+        if ln ~= "" then T(cdl, F.reg, p.x, p.y, col(210,210,216), ln) end
+        imgui.Dummy(V2(W - 48, ln == "" and 12 or 25))
     end
     imgui.EndChild()
     imgui.PopStyleVar(2)
@@ -4934,7 +4983,6 @@ function main()
 
     lua_thread.create(function()
         wait(500)
-        escStep("syncWithGitHub", syncWithGitHub)
         escStep("loadScriptsListNow", loadScriptsListNow, false)
         wait(250)
         escStep("checkForNotification", checkForNotification, true)
