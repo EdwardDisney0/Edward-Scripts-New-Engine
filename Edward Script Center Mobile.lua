@@ -1,6 +1,6 @@
 script_name("Edward Script Center Mobile")
 script_author("EdwardDisney0")
-script_version("2.8")
+script_version("2.9")
 
 require "lib.moonloader"
 local imgui = require("mimgui")
@@ -327,7 +327,7 @@ end
 encoding.default = 'CP1251'
 u8 = encoding.UTF8
 
-CURRENT_VERSION = "2.8"
+CURRENT_VERSION = "2.9"
 
 local GITHUB = {
     repo          = "EdwardDisney0/Edward-Scripts-New-Engine",
@@ -570,7 +570,6 @@ end
 local main_window         = imgui.new.bool(false)
 local notification_window = imgui.new.bool(false)
 local notif_open_pending = false   -- open request from bg thread, consumed in render frame
-local notif_focus_done = false
 
 local main_active_tab = 0
 
@@ -3715,7 +3714,6 @@ local function openNotification()
     STYLE_DIRTY = true
     notification_window[0] = true
     notif_closing = false
-    notif_focus_done = false
 end
 local function closeNotification()
     notif_closing = true
@@ -4415,7 +4413,8 @@ imgui.OnFrame(function() return main_window[0] end, function()
     imgui.PushStyleColor(imgui.Col.Border,   v4(ACC.r*0.7, ACC.g*0.7, ACC.b*0.7, 255))
     imgui.Begin("##edward_script_center", nil,
         imgui.WindowFlags.NoTitleBar + imgui.WindowFlags.NoResize + imgui.WindowFlags.NoScrollbar +
-        imgui.WindowFlags.NoScrollWithMouse + imgui.WindowFlags.NoCollapse + imgui.WindowFlags.NoMove)
+        imgui.WindowFlags.NoScrollWithMouse + imgui.WindowFlags.NoCollapse + imgui.WindowFlags.NoMove +
+        imgui.WindowFlags.NoFocusOnAppearing)
     imgui.PopStyleColor(2)
     imgui.PopStyleVar(3)
     pushF(F.reg)
@@ -4622,7 +4621,6 @@ end, function()
 
     imgui.SetNextWindowPos(V2(sw/2, sh/2 + (1 - a)*24), imgui.Cond.Always, V2(0.5, 0.5))
     imgui.SetNextWindowSize(V2(W, H), imgui.Cond.Always)
-    if not notif_focus_done then imgui.SetNextWindowFocus(); notif_focus_done = true end
     imgui.PushStyleVarFloat(imgui.StyleVar.Alpha, math.max(a, 0.001))
     imgui.PushStyleVarVec2(imgui.StyleVar.WindowPadding, V2(0, 0))
     imgui.PushStyleVarFloat(imgui.StyleVar.WindowRounding, 14)
@@ -4631,7 +4629,8 @@ end, function()
     imgui.PushStyleColor(imgui.Col.Border,   v4(ACC.r*0.75, ACC.g*0.75, ACC.b*0.75, 255))
     imgui.Begin("##edward_notification", nil,
         imgui.WindowFlags.NoTitleBar + imgui.WindowFlags.NoResize + imgui.WindowFlags.NoMove +
-        imgui.WindowFlags.NoCollapse + imgui.WindowFlags.NoScrollbar + imgui.WindowFlags.NoScrollWithMouse)
+        imgui.WindowFlags.NoCollapse + imgui.WindowFlags.NoScrollbar + imgui.WindowFlags.NoScrollWithMouse +
+        imgui.WindowFlags.NoFocusOnAppearing)
     imgui.PopStyleColor(2)
     imgui.PopStyleVar(3)
     pushF(F.reg)
@@ -4724,7 +4723,8 @@ imgui.OnFrame(function() return UIX.su.show end, function()
     imgui.PushStyleColor(imgui.Col.Border,   v4(ACC.r * 0.75, ACC.g * 0.75, ACC.b * 0.75, 255))
     imgui.Begin("##edward_selfupdate", nil,
         imgui.WindowFlags.NoTitleBar + imgui.WindowFlags.NoResize + imgui.WindowFlags.NoMove +
-        imgui.WindowFlags.NoCollapse + imgui.WindowFlags.NoScrollbar + imgui.WindowFlags.NoScrollWithMouse)
+        imgui.WindowFlags.NoCollapse + imgui.WindowFlags.NoScrollbar + imgui.WindowFlags.NoScrollWithMouse +
+        imgui.WindowFlags.NoFocusOnAppearing)
     imgui.PopStyleColor(2)
     imgui.PopStyleVar(3)
     pushF(F.reg)
